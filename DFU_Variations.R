@@ -13,3 +13,5 @@ t1d <- dm_summary %>%
 ## T2D----
 t2d <- dm_summary %>% 
   filter(grepl("^E11", CODEVALUE))
+
+##Test
