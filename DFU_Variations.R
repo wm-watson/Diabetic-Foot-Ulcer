@@ -88,7 +88,8 @@ print(ar_rates_detailed)
 # Print the decile summary
 print(decile_summary)
 
-
+write.csv(ar_rates_detailed, file = "C:/Users/watso/Box/PhD/GIS/DFU/dfu_rates.csv",
+          col.names = TRUE)
 ##Plots----
 ### Sort data by DFU_per_1000 in descending order
 rate_data_sorted <- ar_rates %>%
@@ -107,13 +108,14 @@ ggplot(rate_data_sorted, aes(x = reorder(COUNTYNAME, -DFU_per_1000), y = DFU_per
   scale_fill_viridis_d() 
 
 ### Deciles----
+library(viridis)
 ####DFU Rate----
 decile_averages <- rate_data_sorted %>%
   group_by(DFU_per_1000_decile) %>%
   summarize(average_DFU_per_1000 = mean(DFU_per_1000), .groups = "drop")
 
 ### Create a vector of colors
-colors <- RColorBrewer::brewer.pal(10, "Spectral")
+colors <- viridis::viridis(10)
 
 #Redorder
 decile_averages <- decile_averages %>%
@@ -134,7 +136,7 @@ ggplot(decile_averages, aes(x = DFU_per_1000_decile, y = average_DFU_per_1000, f
 ### VoC----
 
 ### Create a vector of colors
-colors <- RColorBrewer::brewer.pal(10, "Spectral")
+colors <- viridis::viridis(10)
 
 #Redorder
 voc_averages <- decile_summary %>%
