@@ -1,7 +1,7 @@
 library(tidyverse)
 
 #Data----
-dm_summary <- read_csv("C:/Users/watso/Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/prov_pat_zip.csv",
+dm_summary <- read_csv("C:/Users/1187507/Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/prov_pat_zip.csv",
                        col_types = cols(
                          PAT_ZIP_5 = col_character()  # Adjust accordingly if there are more columns
                        ))
@@ -193,7 +193,35 @@ ggplot(voc_decile, aes(x = cov_between_decile, y = CoV_between, fill = cov_betwe
   theme_bw() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         legend.position = "none")
+##Lollipop----
+# Aggregate the data to get mean DFU decile for each CoV decile
+decile_summary <- ar_rates %>%
+  group_by(cov_between_decile) %>%
+  summarise(
+    mean_DFU_decile = mean(DFU_per_1000_decile, na.rm = TRUE)
+  )
 
+
+# Create Cleveland Dot Plot (Lollipop Plot)
+ggplot(decile_summary, aes(x = mean_DFU_decile, y = factor(cov_between_decile))) +
+  geom_segment(aes(x = 0, xend = mean_DFU_decile, y = factor(cov_between_decile), yend = factor(cov_between_decile)), color = "grey", linewidth = 1) +  # Horizontal segments
+  geom_segment(aes(x = mean_DFU_decile, xend = mean_DFU_decile, y = factor(cov_between_decile), yend = 0), color = "grey", linewidth = 0.5) + # Vertical segments
+  geom_point(color = "blue", size = 4) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    panel.grid.major = element_blank(),    # Remove major grid lines
+    panel.grid.minor = element_blank(),    # Remove minor grid lines
+    axis.title.x = element_text(size = 12), # Customize x-axis title
+    axis.title.y = element_text(size = 12), # Customize y-axis title
+    axis.text.x = element_text(size = 10),  # Customize x-axis text
+    axis.text.y = element_text(size = 10)   # Customize y-axis text
+  ) +
+  xlab("DFU Rate Deciles") +
+  ylab("CoV w/in Decile") +
+  ggtitle("DFU Decile vs CoV Decile") +
+  scale_y_discrete(name = "CoV within Decile", breaks = 1:10) +
+  scale_x_continuous(name = "DFU Rate Deciles", breaks = 1:10, limits = c(1, 10))
 
 # Cartography ----
 
@@ -211,7 +239,7 @@ library(grid)
 
 ## DFU per 1,000 ----
 # Shapefile
-gdf <- st_read("C:/Users/watso/Box/PhD/GIS/DFU/COUNTY_BOUNDARY/COUNTY_BOUNDARY.shp")
+gdf <- st_read("C:/Users/1187507/Box/PhD/GIS/DFU/COUNTY_BOUNDARY/COUNTY_BOUNDARY.shp")
 
 
 
@@ -235,6 +263,8 @@ gdf <- st_read("C:/Users/watso/Box/PhD/GIS/DFU/COUNTY_BOUNDARY/COUNTY_BOUNDARY.s
    mutate(centroid_x = st_coordinates(centroids)[,1],
           centroid_y = st_coordinates(centroids)[,2])
  
+ 
+### DFU Decile Map----
  # Generate a diverging color palette with 10 distinct colors
  decile_colors <- brewer.pal(10, "Spectral")
  
@@ -272,9 +302,6 @@ gdf <- st_read("C:/Users/watso/Box/PhD/GIS/DFU/COUNTY_BOUNDARY/COUNTY_BOUNDARY.s
  decile_colors_cov <- rev(decile_colors_cov)
  
  
- # Calculate centroids for text labels
- centroids <- st_centroid(merged_data)
- 
  # Merge centroid coordinates back with the original data for labeling
  merged_data <- merged_data %>%
    mutate(centroid_x_1 = st_coordinates(centroids)[, 1],
@@ -303,6 +330,7 @@ gdf <- st_read("C:/Users/watso/Box/PhD/GIS/DFU/COUNTY_BOUNDARY/COUNTY_BOUNDARY.s
  # Print the map
  print(gmap_cov)
  
+ 
  #Tables----
  library(knitr)
  library(kableExtra)
@@ -316,7 +344,7 @@ gdf <- st_read("C:/Users/watso/Box/PhD/GIS/DFU/COUNTY_BOUNDARY/COUNTY_BOUNDARY.s
  
  # Save the summary table to a CSV file with the specified path
  write.csv(summary_table, 
-           "C:/Users/watso/Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/county_summary_table.csv",
+           "C:/Users/1187507/Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/county_summary_table.csv",
            row.names = FALSE)
  
  
