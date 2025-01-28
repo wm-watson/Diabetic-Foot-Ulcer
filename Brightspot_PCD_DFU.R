@@ -24,115 +24,140 @@ library(tidycensus)
 #Census API Key for pulling in Census data
 census_api_key("ce88034325910cc3e5766b8f7b5636882aca39bd", install = TRUE)
 
-# Map zip to census tract
-library(httr)
-library(jsonlite)
+#Get range of time
+early <- t2d_AR %>% 
+  arrange(desc(Year),desc(Month)) %>% 
+  slice(1)
+view(early)
+
+#Filter out > 2023 119,996 unique IDS, 9947321
+t2d_AR <- t2d_AR %>% 
+  filter(Year <= 2023 & Month <= 12)
+
+## Combine zip to census tract---- 
+library(dplyr)
+library(readxl)
+library(stringr)
+
+# Define the directory where your files are located
+file_directory <- "C:/Users/watso/Box/PhD/PCD - Scientific Writing/Data"
+
+# List all Excel files in the directory with the pattern ZIP_TRACT_MMYYYY.xlsx
+file_list <- list.files(path = file_directory, pattern = "ZIP_TRACT_\\d{6}\\.xlsx", full.names = TRUE)
+file_list <- unique(trimws(file_list))  # Remove duplicates and trim spaces
+
+# Print the list of files to verify they are being identified correctly
+print("List of files to process:")
+print(file_list)
+
+# Function to extract year and month from the filename and determine the quarter
+extract_year_quarter <- function(filename) {
+  # Extract the MMYYYY part from the filename
+  date_part <- str_extract(filename, "\\d{6}")
+  
+  # Extract month and year
+  month <- as.numeric(substr(date_part, 1, 2))
+  year <- as.numeric(substr(date_part, 3, 6))
+  
+  # Determine the quarter based on the month
+  quarter <- case_when(
+    month >= 1 & month <= 3 ~ 1,
+    month >= 4 & month <= 6 ~ 2,
+    month >= 7 & month <= 9 ~ 3,
+    month >= 10 & month <= 12 ~ 4
+  )
+  
+  return(list(year = year, quarter = quarter))
+}
+
+# Initialize an empty list to store individual data frames
+data_list <- list()
+
+# Loop through each file, read it, add Year and Quarter columns, and keep only ZIP and TRACT
+for (file in file_list) {
+  tryCatch({
+    print(paste("Processing file:", file))
+    
+    # Extract year and quarter from the filename
+    year_quarter <- extract_year_quarter(file)
+    print(paste("Year:", year_quarter$year, "Quarter:", year_quarter$quarter))
+    
+    # Read the Excel file
+    data <- read_excel(file)
+    print(paste("Number of rows:", nrow(data)))
+    
+    # Standardize column names to uppercase
+    colnames(data) <- toupper(colnames(data))
+    
+    # Print the column names to verify the data is being read correctly
+    print("Columns in the file:")
+    print(colnames(data))
+    
+    # Skip empty files
+    if (nrow(data) > 0) {
+      # Add Year and Quarter columns and keep only ZIP and TRACT
+      data <- data %>%
+        mutate(Year = year_quarter$year,
+               Quarter = year_quarter$quarter) %>%
+        select(ZIP, TRACT, Year, Quarter)
+      
+      # Append the modified data frame to the list
+      data_list <- append(data_list, list(data))
+    } else {
+      message("Skipping empty file: ", file)
+    }
+  }, error = function(e) {
+    message("Error reading file: ", file, "\n", e$message)
+  })
+}
+
+# Combine all data frames into one
+combined_data <- bind_rows(data_list)
+
+# Ensure ZIP codes are in the same format (uppercase) in both datasets
+combined_data <- combined_data %>%
+  mutate(ZIP = toupper(ZIP))
+
+# Convert Month in t2d_AR to Quarter
+t2d_AR <- t2d_AR %>%
+  mutate(
+    Quarter = case_when(
+      Month >= 1 & Month <= 3 ~ 1,
+      Month >= 4 & Month <= 6 ~ 2,
+      Month >= 7 & Month <= 9 ~ 3,
+      Month >= 10 & Month <= 12 ~ 4
+    )
+  )
+
+# Ensure Year and Quarter columns are consistent
+t2d_AR <- t2d_AR %>%
+  mutate(
+    Year = as.numeric(Year),
+    Quarter = as.numeric(Quarter)
+  )
+
 library(dplyr)
 
-# Function to query the Census Geocoding API with retries
-get_census_tract_with_year <- function(zip_code, year, month, retries = 3) {
-  # Determine the benchmark based on the year
-  benchmark <- ifelse(year <= 2010, "Public_AR_Census2010", "Public_AR_Current")
-  
-  # Base URL for the Census Geocoding API
-  base_url <- "https://geocoding.geo.census.gov/geocoder/locations/address"
-  
-  # Retry logic
-  for (attempt in 1:retries) {
-    # Query the API
-    response <- GET(base_url, query = list(
-      street = "",               # Leave blank for ZIP-level geocoding
-      city = "",
-      state = "",                # Not needed for ZIP-only queries
-      zip = zip_code,            # Provide the ZIP code
-      benchmark = benchmark,     # Specify the benchmark
-      format = "json"            # Request JSON format
-    ))
-    
-    # If the response is successful, parse and return the result
-    if (status_code(response) == 200) {
-      result <- content(response, as = "parsed", type = "application/json")
-      if (!is.null(result$result$addressMatches) && length(result$result$addressMatches) > 0) {
-        tract <- result$result$addressMatches[[1]]$geographies$`Census Tracts`[[1]]$TRACT
-        county <- result$result$addressMatches[[1]]$geographies$`Census Tracts`[[1]]$COUNTY
-        state <- result$result$addressMatches[[1]]$geographies$`Census Tracts`[[1]]$STATE
-        return(data.frame(PAT_ZIP_5 = zip_code, Year = year, Month = month, TRACT = tract, COUNTY = county, STATE = state))
-      } else {
-        return(data.frame(PAT_ZIP_5 = zip_code, Year = year, Month = month, TRACT = NA, COUNTY = NA, STATE = NA))
-      }
-    }
-    
-    # If the response fails, wait and retry
-    Sys.sleep(1)  # Delay before retrying
-  }
-  
-  # If all retries fail, log the failure
-  warning(paste("Failed to fetch data for ZIP:", zip_code, "Year:", year, "Month:", month))
-  return(data.frame(PAT_ZIP_5 = zip_code, Year = year, Month = month, TRACT = NA, COUNTY = NA, STATE = NA))
-}
+# Pull row 37 from x
+row_37_x <- t2d_AR %>% slice(37)
 
-# Function to process ZIP-year-month combinations in batches
-process_batches <- function(data, batch_size = 100, delay = 3) {
-  results <- data.frame()
-  
-  # Loop through the data in batches
-  for (i in seq(1, nrow(data), by = batch_size)) {
-    batch <- data[i:min(i + batch_size - 1, nrow(data)), ]
-    
-    # Process each row in the batch
-    batch_results <- do.call(rbind, lapply(1:nrow(batch), function(j) {
-      row <- batch[j, ]
-      get_census_tract_with_year(row$PAT_ZIP_5, row$Year, row$Month)
-    }))
-    
-    # Append the batch results to the final results
-    results <- rbind(results, batch_results)
-    
-    # Delay between batches to respect API rate limits
-    Sys.sleep(delay)
-  }
-  
-  return(results)
-}
+# Pull row 2012214 from y
+row_2012214_y <- combined_data %>% slice(2012214)
 
-# Extract unique combinations of ZIP, Year, and Month
-unique_zip_year <- t2d_AR %>%
-  select(PAT_ZIP_5, Year, Month) %>%
+# Print the rows
+print(row_37_x)
+print(row_2012214_y)
+
+# Unique rows
+t2d_AR <-  t2d_AR %>%
   distinct()
 
-# Process the data in batches
-results <- process_batches(unique_zip_year, batch_size = 100, delay = 3)
+#Unique Rows
 
-# Merge results back into the original dataset
-enriched_data <- t2d_AR %>%
-  left_join(results, by = c("PAT_ZIP_5", "Year", "Month"))
+combined_data <- combined_data %>%
+  distinct(ZIP, Year, Quarter, .keep_all = TRUE)
 
-# Save the enriched dataset
-write.csv(enriched_data, "t2d_AR_with_tracts.csv", row.names = FALSE)
 
-# Inspect the enriched dataset
-head(enriched_data)
-
-# Log failed requests
-failed_requests <- results %>% filter(is.na(TRACT))
-if (nrow(failed_requests) > 0) {
-  write.csv(failed_requests, "failed_requests.csv", row.names = FALSE)
-  message("Some requests failed. Check 'failed_requests.csv' for details.")
-}
-
-# Retry failed requests (if any)
-if (nrow(failed_requests) > 0) {
-  retried_results <- process_batches(failed_requests, batch_size = 50, delay = 5)
-  
-  # Combine retried results with the original results
-  results <- results %>%
-    filter(!is.na(TRACT)) %>% # Keep only successful results
-    bind_rows(retried_results)
-  
-  # Update the failed ZIP codes log
-  failed_requests <- results %>% filter(is.na(TRACT))
-  if (nrow(failed_requests) > 0) {
-    write.csv(failed_requests, "failed_requests.csv", row.names = FALSE)
-    message("Some ZIP codes still failed after retries.")
-  }
-}
+# Join the datasets on ZIP code, Year, and Quarter
+final_data <- t2d_AR %>%
+  left_join(combined_data, by = c("PAT_ZIP_5" = "ZIP", "Year" = "Year", "Quarter" = "Quarter"))
