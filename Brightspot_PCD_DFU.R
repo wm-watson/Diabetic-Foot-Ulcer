@@ -161,3 +161,6 @@ combined_data <- combined_data %>%
 # Join the datasets on ZIP code, Year, and Quarter
 final_data <- t2d_AR %>%
   left_join(combined_data, by = c("PAT_ZIP_5" = "ZIP", "Year" = "Year", "Quarter" = "Quarter"))
+
+# Write the data to a CSV file
+write_csv(final_data, "final_data.csv")
