@@ -170,3 +170,145 @@ write_csv(final_data, "/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/HPM
 #Read in
 final_data <- read.csv("/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/final_data.csv",
                        header = TRUE, sep = ",")
+
+## Crosswalk of Census Tracts 2010 to 2020
+census_crosswalk <- read_excel("/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/PCD - Scientific Writing/Data/CENSUS_TRACT_CROSSWALK_2010_to_2020_2019.xlsx")
+
+r
+
+# Libraries
+library(readr)
+library(dplyr)
+library(readxl)
+library(tidyr)
+
+# Read in data
+final_data <- read.csv("/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/final_data.csv",
+                       header = TRUE, sep = ",")
+
+## Crosswalk of Census Tracts 2010 to 2020
+census_crosswalk <- read_excel("/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/PCD - Scientific Writing/Data/CENSUS_TRACT_CROSSWALK_2010_to_2020_2019.xlsx")
+
+# Function to fix Arkansas tracts
+fix_ar_tracts <- function(data) {
+  # Create reference table of valid 2010 Arkansas census tracts
+  valid_ar_tracts <- census_crosswalk %>%
+    filter(substr(GEOID_2010, 1, 2) == "05") %>%
+    select(GEOID_2010) %>%
+    distinct()
+  
+  # Create county-tract reference using only valid tracts
+  county_tract_reference <- data %>%
+    filter(Year < 2020, STATE == "AR", !is.na(TRACT)) %>%
+    mutate(
+      TRACT = as.character(TRACT),
+      TRACT = case_when(
+        nchar(TRACT) == 10 ~ paste0("0", TRACT),
+        TRUE ~ TRACT
+      )
+    ) %>%
+    inner_join(valid_ar_tracts, by = c("TRACT" = "GEOID_2010")) %>%
+    group_by(COUNTYNAME) %>%
+    summarise(
+      valid_tract = first(TRACT),
+      tract_count = n_distinct(TRACT)
+    )
+  
+  # Apply the fix
+  fixed_data <- data %>%
+    mutate(
+      TRACT = as.character(TRACT),
+      TRACT = case_when(
+        nchar(TRACT) == 10 ~ paste0("0", TRACT),
+        TRUE ~ TRACT
+      )
+    ) %>%
+    left_join(county_tract_reference, by = "COUNTYNAME") %>%
+    mutate(
+      TRACT = case_when(
+        !is.na(TRACT) ~ TRACT,
+        is.na(TRACT) & !is.na(valid_tract) ~ valid_tract,
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    select(-valid_tract, -tract_count)
+  
+  return(fixed_data)
+}
+
+# Split data into pre-2020 and post-2020 subsets
+pre_2020_data <- final_data %>%
+  filter(Year < 2020) %>%
+  mutate(TRACT = as.character(TRACT))
+
+post_2020_data <- final_data %>%
+  filter(Year >= 2020) %>%
+  mutate(TRACT = as.character(TRACT))
+
+# Process pre-2020 data
+processed_pre_2020 <- pre_2020_data %>%
+  # Apply Arkansas fixes
+  fix_ar_tracts() %>%
+  # Join with crosswalk and apply allocation ratios
+  left_join(
+    census_crosswalk %>% 
+      select(GEOID_2010, GEOID_2020, TOT_RATIO),
+    by = c("TRACT" = "GEOID_2010"),
+    relationship = "many-to-many"
+  ) %>%
+  # Apply allocation ratios for split tracts
+  mutate(
+    final_tract = GEOID_2020,
+    Diabetes_Type_2 = Diabetes_Type_2 * TOT_RATIO,
+    DFU = DFU * TOT_RATIO
+  )
+
+# Process post-2020 data
+processed_post_2020 <- post_2020_data %>%
+  mutate(final_tract = TRACT)
+
+# Combine datasets
+processed_data <- bind_rows(processed_pre_2020, processed_post_2020)
+
+# Verify the results
+verification <- processed_data %>%
+  group_by(Year < 2020) %>%
+  summarise(
+    total_records = n(),
+    records_with_tract = sum(!is.na(final_tract)),
+    match_rate = round(100 * sum(!is.na(final_tract)) / n(), 2)
+  )
+
+print("Final verification of all data:")
+print(verification)
+
+# Generate detailed report by state and year
+detailed_report <- processed_data %>%
+  group_by(STATE, Year) %>%
+  summarise(
+    total_records = n(),
+    records_with_tract = sum(!is.na(final_tract)),
+    match_rate = round(100 * sum(!is.na(final_tract)) / n(), 2)
+  ) %>%
+  arrange(STATE, Year)
+
+print("\nDetailed report by state and year:")
+print(detailed_report)
+
+# Additional verification for Arkansas
+ar_verification <- processed_data %>%
+  filter(STATE == "AR") %>%
+  group_by(Year) %>%
+  summarise(
+    total_records = n(),
+    records_with_tract = sum(!is.na(final_tract)),
+    match_rate = round(100 * sum(!is.na(final_tract)) / n(), 2)
+  )
+
+print("\nArkansas specific verification:")
+print(ar_verification)
+
+# Save the processed data
+write.csv(processed_data, 
+          "/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/final_data_processed.csv",
+          row.names = FALSE)
