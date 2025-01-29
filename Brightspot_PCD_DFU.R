@@ -2,7 +2,7 @@ library(tidyverse)
 
 
 #Data----
-dm_summary <- read_csv("C:/Users/watso/Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/prov_pat_zip.csv",
+dm_summary <- read_csv("/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/prov_pat_zip.csv",
                        col_types = cols(
                          PAT_ZIP_5 = col_character()  # Adjust accordingly if there are more columns
                        ))
@@ -22,7 +22,7 @@ t2d_AR <- t2d %>%
 library(tidycensus)
 
 #Census API Key for pulling in Census data
-census_api_key("ce88034325910cc3e5766b8f7b5636882aca39bd", install = TRUE)
+census_api_key("XXXXX", install = TRUE)
 
 #Get range of time
 early <- t2d_AR %>% 
@@ -40,7 +40,7 @@ library(readxl)
 library(stringr)
 
 # Define the directory where your files are located
-file_directory <- "C:/Users/watso/Box/PhD/PCD - Scientific Writing/Data"
+file_directory <- "/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/PCD - Scientific Writing/Data"
 
 # List all Excel files in the directory with the pattern ZIP_TRACT_MMYYYY.xlsx
 file_list <- list.files(path = file_directory, pattern = "ZIP_TRACT_\\d{6}\\.xlsx", full.names = TRUE)
@@ -162,5 +162,11 @@ combined_data <- combined_data %>%
 final_data <- t2d_AR %>%
   left_join(combined_data, by = c("PAT_ZIP_5" = "ZIP", "Year" = "Year", "Quarter" = "Quarter"))
 
+final_data <- final_data %>% select(-Season, -Zip_diab_pt_seen, -tot_year_diab, -Zip_Pat_from_year)
+
 # Write the data to a CSV file
-write_csv(final_data, "final_data.csv")
+write_csv(final_data, "/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/final_data.csv")
+
+#Read in
+final_data <- read.csv("/Users/williamwatson/Library/CloudStorage/Box-Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/final_data.csv",
+                       header = TRUE, sep = ",")
