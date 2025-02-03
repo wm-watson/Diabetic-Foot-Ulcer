@@ -1,40 +1,126 @@
 library(tidyverse)
+library(vroom)
+library(data.table)
+library(beepr)
 
 
-#Data----
-dm_summary <- read_csv("C:/Users/watso/Box/PhD/HPMT 6213 - Variation in Health System Performance/Diabetic Disparities/Data/prov_pat_zip/prov_pat_zip.csv",
-                       col_types = cols(
-                         PAT_ZIP_5 = col_character()  # Adjust accordingly if there are more columns
-                       ))
+# 1. Raw Data----
+##A. Data----
+# File paths
+claims_directory <- "C:/Users/watso/OneDrive - University of Arkansas for Medical Sciences/Deductible_Project/Deductibles/Data/"
+output_directory <- "C:/Users/watso/Box/PhD/PCD - Scientific Writing/Data/"
 
-#1175067 observations, 13006 unique IDS, 1174501 claims
+# ICD-10 codes for Type 2 Diabetes
+t2d_codes <- c("E110", "E111", "E112", "E113", "E114", "E115", 
+               "E116", "E117", "E118", "E119", "E11")
 
-## T2D----
-# Filter to include only Type 2 Diabetes (T2D) cases 1028718 observationss, 125412 unique ids
-t2d <- dm_summary %>% 
-  filter(grepl("^E11", CODEVALUE))
+# Initialize tracking dataframe
+tracking_counts <- data.frame(
+  year = 2016:2023,
+  total_mvdids = 0,
+  t2d_mvdids = 0,
+  total_claims = 0,
+  t2d_claims = 0
+)
 
-# Filter to include only Arkansas (AR) cases 1008436, 121502 Unique IDS, 1007905 claims
-t2d_AR <- t2d %>% 
-  filter(STATE == "AR")
+# Create temporary file for T2D claims
+temp_file <- paste0(output_directory, "temp_t2d_claims.csv")
+file.create(temp_file)
 
-## Map Zip to census code----
-library(tidycensus)
+# Process each year
+for(year in 2016:2023) {
+  print(paste("Processing", year))
+  
+  filepath <- paste0(claims_directory, "claims_", year, ".csv")
+  
+  # Get column names
+  cols <- names(vroom(filepath, n_max = 1))
+  dx_cols <- cols[grep("^DX", cols)]
+  select_cols <- c("MVDID", dx_cols)
+  
+  # Read the file in chunks using fread
+  chunk_size <- 1e6
+  # Count total rows (subtract 1 for header)
+  total_rows <- as.numeric(count_fields(filepath, tokenizer = tokenizer_csv())[1]) - 1
+  n_chunks <- ceiling(total_rows / chunk_size)
+  
+  for(chunk in 1:n_chunks) {
+    skip_rows <- (chunk - 1) * chunk_size + 1  # Add 1 to skip header
+    
+    # Read chunk
+    if(chunk == n_chunks) {
+      x <- fread(filepath, 
+                 select = select_cols,
+                 skip = skip_rows,
+                 nrows = total_rows - (chunk - 1) * chunk_size)
+    } else {
+      x <- fread(filepath, 
+                 select = select_cols,
+                 skip = skip_rows,
+                 nrows = chunk_size)
+    }
+    
+    # Clean diagnosis codes
+    for(col in dx_cols) {
+      set(x, j = col, value = gsub("[. ]", "", x[[col]]))
+    }
+    
+    # Find T2D diagnoses
+    t2d_rows <- x[Reduce(`|`, lapply(dx_cols, function(col) x[[col]] %in% t2d_codes))]
+    
+    # Update tracking counts
+    tracking_counts[tracking_counts$year == year, "total_claims"] <- 
+      tracking_counts[tracking_counts$year == year, "total_claims"] + nrow(x)
+    
+    tracking_counts[tracking_counts$year == year, "total_mvdids"] <- 
+      tracking_counts[tracking_counts$year == year, "total_mvdids"] + uniqueN(x$MVDID)
+    
+    if(nrow(t2d_rows) > 0) {
+      tracking_counts[tracking_counts$year == year, "t2d_claims"] <- 
+        tracking_counts[tracking_counts$year == year, "t2d_claims"] + nrow(t2d_rows)
+      
+      tracking_counts[tracking_counts$year == year, "t2d_mvdids"] <- 
+        tracking_counts[tracking_counts$year == year, "t2d_mvdids"] + uniqueN(t2d_rows$MVDID)
+      
+      # Append T2D claims to temporary file
+      fwrite(t2d_rows, temp_file, append = TRUE)
+    }
+    
+    # Print progress
+    print(paste("Processed chunk", chunk, "of", n_chunks, "for year", year))
+  }
+}
 
-#Census API Key for pulling in Census data
-census_api_key("ce88034325910cc3e5766b8f7b5636882aca39bd", install = TRUE)
+# Read and process final T2D claims
+t2d_claims_raw <- fread(temp_file)
 
-#Get range of time
-early <- t2d_AR %>% 
-  arrange(desc(Year),desc(Month)) %>% 
-  slice(1)
-view(early)
+# Clean up temporary file
+unlink(temp_file)
 
-#Filter out > 2023 119,996 unique IDS, 9947321
-t2d_AR <- t2d_AR %>% 
-  filter(Year <= 2023 & Month <= 12)
+# Save results
+fwrite(t2d_claims_raw, paste0(output_directory, "t2d_claims_raw.csv"))
+fwrite(as.data.table(tracking_counts), paste0(output_directory, "t2d_tracking_counts.csv"))
 
-## Combine zip to census tract---- 
+# Print summary
+print("Processing complete. Summary by year:")
+print(tracking_counts)
+
+# Print overall summary
+total_summary <- data.table(tracking_counts)[, .(
+  total_years = uniqueN(year),
+  total_mvids = sum(total_mvdids),
+  unique_t2d_mvids = uniqueN(t2d_claims_raw$MVDID),
+  total_claims = sum(total_claims),
+  t2d_claims = sum(t2d_claims),
+  t2d_mvid_pct = round(100 * uniqueN(t2d_claims_raw$MVDID) / sum(total_mvdids), 2),
+  t2d_claims_pct = round(100 * sum(t2d_claims) / sum(total_claims), 2)
+)]
+
+print("\nOverall Summary:")
+print(total_summary)
+beep(8)
+
+## B. Census Tract Data---- 
 library(dplyr)
 library(readxl)
 library(stringr)
