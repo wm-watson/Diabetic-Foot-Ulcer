@@ -1,21 +1,28 @@
 /*****************************************************************************
- Step 3: Combined Diabetes + DFU Cohort Builder (Passthrough Optimized)
+ Step 3: Combined DM + DFU Cohort Builder (Memory-Optimized Passthrough)
 
  Replaces separate step3_diabetes_cohort.sas and step4_dfu_identification.sas.
- Uses explicit SQL passthrough to push all filtering to the database server.
- Each table is scanned ONCE for both DM (E10/E11) and DFU (L97/combo) codes,
- halving total table scans from ~30 to ~15.
+ Uses explicit SQL passthrough with GROUP BY so the database returns
+ patient-level summaries (not claim-level rows), drastically reducing the
+ volume of data transferred through ODBC and stored in SAS.
+
+ Memory strategy:
+   - Each passthrough query aggregates to 1 row per patient (commercial:
+     per patient per year; Medicare: per patient per table)
+   - Results are appended incrementally to D:\WPWatson (not WORK)
+   - Only the final 4 cohort datasets live in WORK for step5
+   - All intermediates deleted after use
 
  Architecture:
-   Part A: Helper macros for generating DX field conditions
-   Part B: Commercial passthrough queries (8 year tables, 2017-2024)
-   Part C: Commercial aggregation -> dm_cohort_commercial + dfu_cohort_commercial
-   Part D: Medicare passthrough queries (7 claim tables)
-   Part E: Medicare aggregation -> dm_cohort_medicare + dfu_cohort_medicare
+   Part A: Helper macros (DX field conditions + severity extraction)
+   Part B: Commercial passthrough w/ GROUP BY (8 year tables -> D:\WPWatson)
+   Part C: Commercial final aggregation -> WORK.dm/dfu_cohort_commercial
+   Part D: Medicare passthrough w/ GROUP BY (7 claim tables -> D:\WPWatson)
+   Part E: Medicare final aggregation -> WORK.dm/dfu_cohort_medicare
    Part F: Cross-validation with BEN_SUM_CC
    Part G: Summary reports + cleanup
 
- ICD-10-CM Codes Scanned:
+ ICD-10-CM Codes:
    Diabetes:  E10.x (T1D), E11.x (T2D)
    DFU:       L97.1xx-L97.9xx (non-pressure chronic ulcer of lower limb)
    DFU combo: E10.621, E10.622, E11.621, E11.622
@@ -39,34 +46,28 @@
    Commercial (14): mc039 (admitting), mc041 (principal), mc042-mc053
    Medicare: prncpal_dgns_cd + icd_dgns_cd1..N [+ admtg_dgns_cd on INP/SNF]
 
- Server-confirmed facts (step2):
-   - ICD codes stored WITHOUT dots (e.g., E1165, L97522)
-   - ZIPs are 5-digit
-   - admtg_dgns_cd exists on INP and SNF tables
-   - All 18 tables present
-
- L97 Severity (character 6, after removing dots — codes have no dots on server):
-   4 = Necrosis of bone (most severe)
-   3 = Necrosis of muscle
-   2 = Fat layer exposed
-   1 = Skin breakdown only
-   0 = Other / unspecified / code too short
+ NOTE: Passthrough SQL uses PostgreSQL syntax (length(), extract()).
+       If the database is SQL Server, replace length() with len() and
+       extract(year from col) with year(col).
 *****************************************************************************/
 
-/* Libname for cross-validation queries (Part F) */
+/* Persistent library on personal drive — more space than WORK */
+libname mylib 'D:\WPWatson';
+
+/* Libname for BEN_SUM_CC cross-validation (Part F) */
 libname arapcd odbc
     noprompt="dsn=APCD-24D;Trusted_connection=yes"
     schema=public;
 
-/* Single-quote character for use inside passthrough SQL strings.
-   &macro_vars do not resolve inside single quotes, so we store a
-   quote character in &q and concatenate: &q.E10%&q. -> 'E10%'     */
+/* Single-quote character for passthrough SQL strings.
+   &macro_vars do not resolve inside SAS single quotes, so we store
+   a quote character in &q and concatenate: &q.E10%&q. -> 'E10%'   */
 %let q = %str(%');
 
 /* ======================================================================= */
 /* PART A: Helper Macros                                                    */
-/*   These generate native SQL fragments. SAS macros resolve BEFORE the     */
-/*   SQL is sent to the database via passthrough.                           */
+/*   Generate native SQL fragments. SAS macros resolve BEFORE the SQL       */
+/*   is sent to the database via passthrough.                               */
 /* ======================================================================= */
 
 /*--- Commercial: LIKE 'prefix%' across 14 DX fields ---*/
@@ -87,15 +88,25 @@ libname arapcd odbc
     %end;
 %mend;
 
-/*--- Commercial: extract first L97 code found across 14 DX fields ---*/
-%macro comm_first_l97;
+/*--- Commercial: per-row L97 severity rank (first L97 code found) ---*/
+/*    Returns integer 0-4. Used inside max() in GROUP BY.             */
+%macro comm_row_severity;
     case
-        when upper(mc039) like &q.L97%&q. then upper(mc039)
-        when upper(mc041) like &q.L97%&q. then upper(mc041)
+        when upper(mc039) like &q.L97%&q. and length(mc039) >= 6 then
+            case substring(upper(mc039), 6, 1)
+                when &q.4&q. then 4 when &q.3&q. then 3
+                when &q.2&q. then 2 when &q.1&q. then 1 else 0 end
+        when upper(mc041) like &q.L97%&q. and length(mc041) >= 6 then
+            case substring(upper(mc041), 6, 1)
+                when &q.4&q. then 4 when &q.3&q. then 3
+                when &q.2&q. then 2 when &q.1&q. then 1 else 0 end
         %do i = 42 %to 53;
-            when upper(mc0&i.) like &q.L97%&q. then upper(mc0&i.)
+            when upper(mc0&i.) like &q.L97%&q. and length(mc0&i.) >= 6 then
+                case substring(upper(mc0&i.), 6, 1)
+                    when &q.4&q. then 4 when &q.3&q. then 3
+                    when &q.2&q. then 2 when &q.1&q. then 1 else 0 end
         %end;
-        else &q.&q.
+        else 0
     end
 %mend;
 
@@ -110,7 +121,7 @@ libname arapcd odbc
     %end;
 %mend;
 
-/*--- Medicare: IN (DFU combo codes) across DX fields ---*/
+/*--- Medicare: IN (DFU combo codes) ---*/
 %macro mcr_in_combo(max_dx, has_admtg);
     %if &has_admtg = 1 %then %do;
         upper(admtg_dgns_cd) in (&q.E10621&q.,&q.E10622&q.,&q.E11621&q.,&q.E11622&q.) or
@@ -121,56 +132,86 @@ libname arapcd odbc
     %end;
 %mend;
 
-/*--- Medicare: extract first L97 code found ---*/
-%macro mcr_first_l97(max_dx, has_admtg);
+/*--- Medicare: per-row L97 severity rank ---*/
+%macro mcr_row_severity(max_dx, has_admtg);
     case
         %if &has_admtg = 1 %then %do;
-            when upper(admtg_dgns_cd) like &q.L97%&q. then upper(admtg_dgns_cd)
+            when upper(admtg_dgns_cd) like &q.L97%&q. and length(admtg_dgns_cd) >= 6 then
+                case substring(upper(admtg_dgns_cd), 6, 1)
+                    when &q.4&q. then 4 when &q.3&q. then 3
+                    when &q.2&q. then 2 when &q.1&q. then 1 else 0 end
         %end;
-        when upper(prncpal_dgns_cd) like &q.L97%&q. then upper(prncpal_dgns_cd)
+        when upper(prncpal_dgns_cd) like &q.L97%&q. and length(prncpal_dgns_cd) >= 6 then
+            case substring(upper(prncpal_dgns_cd), 6, 1)
+                when &q.4&q. then 4 when &q.3&q. then 3
+                when &q.2&q. then 2 when &q.1&q. then 1 else 0 end
         %do i = 1 %to &max_dx;
-            when upper(icd_dgns_cd&i.) like &q.L97%&q. then upper(icd_dgns_cd&i.)
+            when upper(icd_dgns_cd&i.) like &q.L97%&q. and length(icd_dgns_cd&i.) >= 6 then
+                case substring(upper(icd_dgns_cd&i.), 6, 1)
+                    when &q.4&q. then 4 when &q.3&q. then 3
+                    when &q.2&q. then 2 when &q.1&q. then 1 else 0 end
         %end;
-        else &q.&q.
+        else 0
     end
 %mend;
 
 /* ======================================================================= */
-/* PART B: Commercial Passthrough Queries (2017-2024)                       */
-/*   One connection per year table. Each scan finds DM + DFU in one pass.   */
-/*   WHERE clause: any DX field has E10% OR E11% OR L97%.                   */
-/*   (E10621/E11621 combo codes are subsets of E10%/E11%, so already        */
-/*    captured by the WHERE; flagged separately in SELECT.)                 */
+/* PART B: Commercial Passthrough with GROUP BY (2017-2024)                 */
+/*   Each query returns 1 row per patient per year (not per claim).         */
+/*   Results appended incrementally to mylib.comm_patient_year.             */
 /* ======================================================================= */
 
-%macro get_comm(yr);
+%macro get_comm(yr, first=0);
     proc sql;
         connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
-        create table _comm_&yr. as
+        create table _comm_yr as
         select * from connection to odbc (
             select mc001 as submitter,
                    mc006 as group_policy,
                    mc009 as person_code,
-                   mc017 as service_date,
                    &yr. as claim_year,
-                   /* Diabetes flags */
-                   case when (%comm_like(E10)) then 1 else 0 end as has_t1d,
-                   case when (%comm_like(E11)) then 1 else 0 end as has_t2d,
-                   /* DFU flags */
-                   case when (%comm_like(L97)) then 1 else 0 end as has_l97,
-                   case when (%comm_in_combo)  then 1 else 0 end as has_dm_combo,
-                   /* First L97 code found (for severity parsing in SAS) */
-                   cast(%comm_first_l97 as varchar(10)) as l97_code
+                   /* DM flags: did this patient have E10/E11 this year? */
+                   max(case when (%comm_like(E10)) then 1 else 0 end) as has_t1d,
+                   max(case when (%comm_like(E11)) then 1 else 0 end) as has_t2d,
+                   /* DFU flags: did this patient have L97/combo this year? */
+                   max(case when (%comm_like(L97)) then 1 else 0 end) as has_l97,
+                   max(case when (%comm_in_combo)  then 1 else 0 end) as has_dm_combo,
+                   /* Claim counts */
+                   sum(case when (%comm_like(E10)) or (%comm_like(E11))
+                            then 1 else 0 end) as n_dm_claims,
+                   sum(case when (%comm_like(L97)) or (%comm_in_combo)
+                            then 1 else 0 end) as n_dfu_claims,
+                   /* Earliest dates (null if no matching claims) */
+                   min(case when (%comm_like(E10)) or (%comm_like(E11))
+                            then mc017 else null end) as first_dm_date,
+                   min(case when (%comm_like(L97)) or (%comm_in_combo)
+                            then mc017 else null end) as first_dfu_date,
+                   /* Worst L97 severity this year */
+                   max(%comm_row_severity) as max_severity_rank
             from public.CLAIM_SVC_DT_&yr.
             where (%comm_like(E10))
                or (%comm_like(E11))
                or (%comm_like(L97))
+            group by mc001, mc006, mc009
         );
         disconnect from odbc;
     quit;
+
+    /* Append to accumulator on D:\WPWatson */
+    %if &first = 1 %then %do;
+        data mylib.comm_patient_year; set _comm_yr; run;
+    %end;
+    %else %do;
+        proc append base=mylib.comm_patient_year data=_comm_yr force; run;
+    %end;
+
+    /* Free WORK immediately */
+    proc datasets lib=work nolist; delete _comm_yr; quit;
+
+    %put NOTE: Commercial &yr. complete.;
 %mend;
 
-%get_comm(2017);
+%get_comm(2017, first=1);
 %get_comm(2018);
 %get_comm(2019);
 %get_comm(2020);
@@ -179,34 +220,12 @@ libname arapcd odbc
 %get_comm(2023);
 %get_comm(2024);
 
-/* Stack all commercial results and parse L97 severity */
-data dm_dfu_claims_commercial;
-    set _comm_2017 _comm_2018 _comm_2019 _comm_2020
-        _comm_2021 _comm_2022 _comm_2023 _comm_2024;
-    length _sev $1;
-    if l97_code ne '' and length(strip(l97_code)) >= 6 then do;
-        _sev = substr(strip(l97_code), 6, 1);
-        if      _sev = '4' then l97_severity_rank = 4;
-        else if _sev = '3' then l97_severity_rank = 3;
-        else if _sev = '2' then l97_severity_rank = 2;
-        else if _sev = '1' then l97_severity_rank = 1;
-        else l97_severity_rank = 0;
-    end;
-    else l97_severity_rank = 0;
-    drop _sev;
-run;
-
-/* Free year-level temp tables */
-proc datasets lib=work nolist;
-    delete _comm_2017 _comm_2018 _comm_2019 _comm_2020
-           _comm_2021 _comm_2022 _comm_2023 _comm_2024;
-quit;
-
 /* ======================================================================= */
-/* PART C: Commercial Aggregation                                           */
+/* PART C: Commercial Final Aggregation (across all years)                  */
+/*   Reads from mylib.comm_patient_year -> WORK cohort datasets             */
 /* ======================================================================= */
 
-/* C-1: Diabetes cohort — all patients with E10/E11 codes */
+/* C-1: Diabetes cohort */
 proc sql;
     create table dm_cohort_commercial as
     select submitter,
@@ -218,31 +237,35 @@ proc sql;
                when max(has_t2d) = 1 then 'T2D'
                else 'UNKNOWN'
            end as dm_type length=10,
-           min(service_date) as first_dm_date format=yymmdd10.,
-           min(claim_year) as first_dm_year,
-           max(claim_year) as last_dm_year,
-           count(*) as n_dm_claims,
+           min(first_dm_date) as first_dm_date format=yymmdd10.,
+           min(case when has_t1d = 1 or has_t2d = 1
+                    then claim_year else . end) as first_dm_year,
+           max(case when has_t1d = 1 or has_t2d = 1
+                    then claim_year else . end) as last_dm_year,
+           sum(n_dm_claims) as n_dm_claims,
            'COMMERCIAL' as data_source length=10
-    from dm_dfu_claims_commercial
-    where has_t1d = 1 or has_t2d = 1
-    group by submitter, group_policy, person_code;
+    from mylib.comm_patient_year
+    group by submitter, group_policy, person_code
+    having max(has_t1d) = 1 or max(has_t2d) = 1;
 quit;
 
-/* C-2: DFU cohort — patients with L97/combo codes who are in DM cohort */
+/* C-2: DFU cohort — restricted to DM patients */
 proc sql;
     create table dfu_cohort_commercial as
     select a.submitter,
            a.group_policy,
            a.person_code,
-           min(a.service_date) as first_dfu_date format=yymmdd10.,
-           min(a.claim_year) as first_dfu_year,
-           max(a.claim_year) as last_dfu_year,
-           count(*) as n_dfu_claims,
+           min(a.first_dfu_date) as first_dfu_date format=yymmdd10.,
+           min(case when a.has_l97 = 1 or a.has_dm_combo = 1
+                    then a.claim_year else . end) as first_dfu_year,
+           max(case when a.has_l97 = 1 or a.has_dm_combo = 1
+                    then a.claim_year else . end) as last_dfu_year,
+           sum(a.n_dfu_claims) as n_dfu_claims,
            max(a.has_l97) as ever_l97,
            max(a.has_dm_combo) as ever_dm_combo,
-           max(a.l97_severity_rank) as max_severity_rank,
+           max(a.max_severity_rank) as max_severity_rank,
            'COMMERCIAL' as data_source length=10
-    from dm_dfu_claims_commercial a
+    from mylib.comm_patient_year a
     inner join dm_cohort_commercial b
         on a.submitter = b.submitter
        and a.group_policy = b.group_policy
@@ -251,44 +274,101 @@ proc sql;
     group by a.submitter, a.group_policy, a.person_code;
 quit;
 
-/* Free commercial claims */
-proc datasets lib=work nolist; delete dm_dfu_claims_commercial; quit;
+/* Free commercial intermediate */
+proc datasets lib=mylib nolist; delete comm_patient_year; quit;
+
+title "Step 3C: Commercial Cohort Counts";
+proc sql;
+    select 'DM patients' as metric, count(*) as n format=comma12.
+        from dm_cohort_commercial
+    union all
+    select 'DFU patients', count(*) from dfu_cohort_commercial;
+quit;
 
 /* ======================================================================= */
-/* PART D: Medicare Passthrough Queries (7 claim tables)                    */
-/*   One connection per table. Same dual DM+DFU scan.                      */
-/*   Date filter: clm_from_dt < '2025-01-01' (equivalent to year <= 2024)  */
+/* PART D: Medicare Passthrough with GROUP BY (7 claim tables)              */
+/*   Each query returns 1 row per patient per table (not per claim).        */
+/*   Year stats computed via extract(year from clm_from_dt).                */
+/*   Date filter: clm_from_dt < '2025-01-01' (= year <= 2024).             */
 /* ======================================================================= */
 
-%macro get_mcr(name, tbl, max_dx, has_admtg);
+%macro get_mcr(name, tbl, max_dx, has_admtg, first=0);
     proc sql;
         connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
-        create table _mcr_&name. as
+        create table _mcr_tbl as
         select * from connection to odbc (
             select bene_id,
-                   clm_from_dt as service_date,
-                   /* Diabetes flags */
-                   case when (%mcr_like(E10, &max_dx., &has_admtg.)) then 1 else 0 end as has_t1d,
-                   case when (%mcr_like(E11, &max_dx., &has_admtg.)) then 1 else 0 end as has_t2d,
+                   /* DM flags */
+                   max(case when (%mcr_like(E10, &max_dx., &has_admtg.))
+                            then 1 else 0 end) as has_t1d,
+                   max(case when (%mcr_like(E11, &max_dx., &has_admtg.))
+                            then 1 else 0 end) as has_t2d,
                    /* DFU flags */
-                   case when (%mcr_like(L97, &max_dx., &has_admtg.)) then 1 else 0 end as has_l97,
-                   case when (%mcr_in_combo(&max_dx., &has_admtg.))  then 1 else 0 end as has_dm_combo,
-                   /* First L97 code for severity */
-                   cast(%mcr_first_l97(&max_dx., &has_admtg.) as varchar(10)) as l97_code
+                   max(case when (%mcr_like(L97, &max_dx., &has_admtg.))
+                            then 1 else 0 end) as has_l97,
+                   max(case when (%mcr_in_combo(&max_dx., &has_admtg.))
+                            then 1 else 0 end) as has_dm_combo,
+                   /* Claim counts */
+                   sum(case when (%mcr_like(E10, &max_dx., &has_admtg.))
+                              or (%mcr_like(E11, &max_dx., &has_admtg.))
+                            then 1 else 0 end) as n_dm_claims,
+                   sum(case when (%mcr_like(L97, &max_dx., &has_admtg.))
+                              or (%mcr_in_combo(&max_dx., &has_admtg.))
+                            then 1 else 0 end) as n_dfu_claims,
+                   /* Dates */
+                   min(case when (%mcr_like(E10, &max_dx., &has_admtg.))
+                              or (%mcr_like(E11, &max_dx., &has_admtg.))
+                            then clm_from_dt else null end) as first_dm_date,
+                   min(case when (%mcr_like(L97, &max_dx., &has_admtg.))
+                              or (%mcr_in_combo(&max_dx., &has_admtg.))
+                            then clm_from_dt else null end) as first_dfu_date,
+                   /* Year ranges */
+                   min(case when (%mcr_like(E10, &max_dx., &has_admtg.))
+                              or (%mcr_like(E11, &max_dx., &has_admtg.))
+                            then extract(year from clm_from_dt) else null end)
+                       as first_dm_year,
+                   max(case when (%mcr_like(E10, &max_dx., &has_admtg.))
+                              or (%mcr_like(E11, &max_dx., &has_admtg.))
+                            then extract(year from clm_from_dt) else null end)
+                       as last_dm_year,
+                   min(case when (%mcr_like(L97, &max_dx., &has_admtg.))
+                              or (%mcr_in_combo(&max_dx., &has_admtg.))
+                            then extract(year from clm_from_dt) else null end)
+                       as first_dfu_year,
+                   max(case when (%mcr_like(L97, &max_dx., &has_admtg.))
+                              or (%mcr_in_combo(&max_dx., &has_admtg.))
+                            then extract(year from clm_from_dt) else null end)
+                       as last_dfu_year,
+                   /* Worst L97 severity */
+                   max(%mcr_row_severity(&max_dx., &has_admtg.)) as max_severity_rank
             from public.APCD_MCR_&tbl._CLM
             where ((%mcr_like(E10, &max_dx., &has_admtg.))
                 or (%mcr_like(E11, &max_dx., &has_admtg.))
                 or (%mcr_like(L97, &max_dx., &has_admtg.)))
               and clm_from_dt < &q.2025-01-01&q.
+            group by bene_id
         );
         disconnect from odbc;
     quit;
+
+    /* Append to accumulator on D:\WPWatson */
+    %if &first = 1 %then %do;
+        data mylib.mcr_patient_tbl; set _mcr_tbl; run;
+    %end;
+    %else %do;
+        proc append base=mylib.mcr_patient_tbl data=_mcr_tbl force; run;
+    %end;
+
+    /* Free WORK immediately */
+    proc datasets lib=work nolist; delete _mcr_tbl; quit;
+
+    %put NOTE: Medicare &name. (&tbl.) complete.;
 %mend;
 
 /* Part B Carrier: 12 DX fields, no admtg_dgns_cd */
-%get_mcr(prtb, PRTB_CAR, 12, 0);
+%get_mcr(prtb, PRTB_CAR, 12, 0, first=1);
 
-/* Outpatient: 25 DX fields, no admtg_dgns_cd */
+/* Outpatient: 25 DX fields */
 %get_mcr(out, OUT, 25, 0);
 
 /* Inpatient: 25 DX fields + admtg_dgns_cd */
@@ -300,36 +380,15 @@ proc datasets lib=work nolist; delete dm_dfu_claims_commercial; quit;
 /* HHA: 25 DX fields */
 %get_mcr(hha, HHA, 25, 0);
 
-/* HSP (Hospice): 25 DX fields */
+/* Hospice: 25 DX fields */
 %get_mcr(hsp, HSP, 25, 0);
 
 /* DME: 12 DX fields */
 %get_mcr(dme, DME, 12, 0);
 
-/* Stack all Medicare results and parse L97 severity */
-data dm_dfu_claims_medicare;
-    set _mcr_prtb _mcr_out _mcr_inp _mcr_snf _mcr_hha _mcr_hsp _mcr_dme;
-    claim_year = year(service_date);
-    length _sev $1;
-    if l97_code ne '' and length(strip(l97_code)) >= 6 then do;
-        _sev = substr(strip(l97_code), 6, 1);
-        if      _sev = '4' then l97_severity_rank = 4;
-        else if _sev = '3' then l97_severity_rank = 3;
-        else if _sev = '2' then l97_severity_rank = 2;
-        else if _sev = '1' then l97_severity_rank = 1;
-        else l97_severity_rank = 0;
-    end;
-    else l97_severity_rank = 0;
-    drop _sev;
-run;
-
-/* Free table-level temp datasets */
-proc datasets lib=work nolist;
-    delete _mcr_prtb _mcr_out _mcr_inp _mcr_snf _mcr_hha _mcr_hsp _mcr_dme;
-quit;
-
 /* ======================================================================= */
-/* PART E: Medicare Aggregation                                             */
+/* PART E: Medicare Final Aggregation (across all 7 tables)                 */
+/*   A patient may appear in multiple tables; combine their stats.          */
 /* ======================================================================= */
 
 /* E-1: Diabetes cohort */
@@ -342,37 +401,45 @@ proc sql;
                when max(has_t2d) = 1 then 'T2D'
                else 'UNKNOWN'
            end as dm_type length=10,
-           min(service_date) as first_dm_date format=yymmdd10.,
-           min(claim_year) as first_dm_year,
-           max(claim_year) as last_dm_year,
-           count(*) as n_dm_claims,
+           min(first_dm_date) as first_dm_date format=yymmdd10.,
+           min(first_dm_year) as first_dm_year,
+           max(last_dm_year) as last_dm_year,
+           sum(n_dm_claims) as n_dm_claims,
            'MEDICARE' as data_source length=10
-    from dm_dfu_claims_medicare
-    where has_t1d = 1 or has_t2d = 1
-    group by bene_id;
+    from mylib.mcr_patient_tbl
+    group by bene_id
+    having max(has_t1d) = 1 or max(has_t2d) = 1;
 quit;
 
 /* E-2: DFU cohort — restricted to DM patients */
 proc sql;
     create table dfu_cohort_medicare as
     select a.bene_id,
-           min(a.service_date) as first_dfu_date format=yymmdd10.,
-           min(a.claim_year) as first_dfu_year,
-           max(a.claim_year) as last_dfu_year,
-           count(*) as n_dfu_claims,
+           min(a.first_dfu_date) as first_dfu_date format=yymmdd10.,
+           min(a.first_dfu_year) as first_dfu_year,
+           max(a.last_dfu_year) as last_dfu_year,
+           sum(a.n_dfu_claims) as n_dfu_claims,
            max(a.has_l97) as ever_l97,
            max(a.has_dm_combo) as ever_dm_combo,
-           max(a.l97_severity_rank) as max_severity_rank,
+           max(a.max_severity_rank) as max_severity_rank,
            'MEDICARE' as data_source length=10
-    from dm_dfu_claims_medicare a
+    from mylib.mcr_patient_tbl a
     inner join dm_cohort_medicare b
         on a.bene_id = b.bene_id
     where a.has_l97 = 1 or a.has_dm_combo = 1
     group by a.bene_id;
 quit;
 
-/* Free Medicare claims */
-proc datasets lib=work nolist; delete dm_dfu_claims_medicare; quit;
+/* Free Medicare intermediate */
+proc datasets lib=mylib nolist; delete mcr_patient_tbl; quit;
+
+title "Step 3E: Medicare Cohort Counts";
+proc sql;
+    select 'DM patients' as metric, count(*) as n format=comma12.
+        from dm_cohort_medicare
+    union all
+    select 'DFU patients', count(*) from dfu_cohort_medicare;
+quit;
 
 /* ======================================================================= */
 /* PART F: Cross-Validate Medicare with BEN_SUM_CC Diabetes Flags           */
@@ -465,32 +532,34 @@ title;
 /*****************************************************************************
  NOTES:
 
- 1. PASSTHROUGH OPTIMIZATION: Each table is scanned exactly once. The WHERE
-    clause filters on the database server, returning only matching rows
-    through ODBC. This avoids pulling billions of rows into SAS memory.
+ 1. MEMORY OPTIMIZATION: The database performs GROUP BY, returning 1 row per
+    patient (not per claim). A table with 10M claims and 300K diabetic
+    patients returns only ~300K rows through ODBC instead of ~1M claim rows.
 
- 2. COMBINED SCAN: DM (E10/E11) and DFU (L97/combo) codes are captured in
-    a single pass per table. The DFU combo codes (E10621, E10622, E11621,
-    E11622) are subsets of E10%/E11%, so the WHERE clause only needs three
-    LIKE patterns: E10%, E11%, L97%.
+ 2. INCREMENTAL PROCESSING: Each table is queried independently. Results are
+    appended to D:\WPWatson (not WORK), and the temp table is deleted
+    immediately. At most one temp table exists in WORK at any time.
 
- 3. DFU RESTRICTION: The DFU cohort is restricted to patients already in the
-    DM cohort via INNER JOIN. L97 claims from non-diabetic patients are
-    excluded during aggregation.
+ 3. PASSTHROUGH BENEFITS: WHERE filtering runs on the database server. The
+    database scans the table once, applies the WHERE, computes aggregates,
+    and returns the small result set. SAS never sees the raw claims.
 
- 4. SEVERITY PARSING: L97 codes are 6-7 characters (no dots on server).
-    Character 6 encodes severity: 4=bone necrosis, 3=muscle necrosis,
-    2=fat exposed, 1=skin breakdown. max_severity_rank takes the worst
-    severity across all claims for each patient.
+ 4. SEVERITY COMPUTATION: L97 severity is computed per-row in the database
+    SQL (CASE on 6th character of each L97 code found). MAX() in GROUP BY
+    takes the worst severity across all claims for each patient.
 
- 5. MEMORY MANAGEMENT: Intermediate temp tables (_comm_YYYY, _mcr_*)
-    and claims-level datasets are deleted after aggregation to free WORK
-    space. Only the 4 cohort datasets persist for step5.
+ 5. DFU RESTRICTION: The DFU cohort is restricted to patients in the DM
+    cohort via INNER JOIN during final aggregation. L97 claims from
+    non-diabetic patients are excluded.
 
- 6. AMBIGUOUS DM TYPE: Patients with both E10.x and E11.x across their
-    claim history are flagged as AMBIGUOUS per study protocol.
+ 6. COLUMN CONTRACT: The 4 output datasets match the exact column names
+    expected by step5_zip_extract.sas. No changes to step5 needed.
 
- 7. COLUMN CONTRACT: The 4 output datasets match the exact column names
-    and types expected by step5_zip_extract.sas. No changes to step5
-    are required.
+ 7. POSTGRESQL FUNCTIONS: This code uses length() and extract(year from ...).
+    If the database is SQL Server, replace:
+      length(col) -> len(col)
+      extract(year from col) -> year(col)
+
+ 8. AMBIGUOUS DM TYPE: Patients with both E10.x and E11.x across their
+    full claim history are flagged as AMBIGUOUS per study protocol.
 *****************************************************************************/
