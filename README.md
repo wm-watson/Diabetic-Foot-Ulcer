@@ -22,10 +22,9 @@ This project builds an analytical pipeline to:
 .
 ├── README.md
 └── sas/
-    ├── step2_inventory.sas          # Table structure verification & data quality checks
-    ├── step3_diabetes_cohort.sas    # T1D / T2D / AMBIGUOUS cohort identification
-    ├── step4_dfu_identification.sas # DFU case identification among diabetics
-    └── step5_zip_extract.sas        # ZIP extraction, linkage, dedup, CSV export
+    ├── step2_inventory.sas    # Table structure verification & data quality checks
+    ├── step3_cohort.sas       # Combined DM + DFU cohort (passthrough optimized)
+    └── step5_zip_extract.sas  # ZIP extraction, linkage, dedup, CSV export
 ```
 
 ## Data Source
@@ -34,62 +33,58 @@ This project builds an analytical pipeline to:
 - **Commercial/Medicaid claims**: Year-partitioned tables `CLAIM_SVC_DT_2017` through `CLAIM_SVC_DT_2024`
 - **Medicare Fee-for-Service**: 7 claim tables (Part B Carrier, Outpatient, Inpatient, SNF, HHA, Hospice, DME)
 - **Enrollment/linkage tables**: MEMBER, MEST (AR_APCD_24B_MEST), APCD_MCR_BEN_SUM
-- **Study period**: 2017–2024 (2025 excluded — partial year creates false cold spots in EHSA)
+- **Study period**: 2017-2024 (2025 excluded -- partial year creates false cold spots in EHSA)
 
 ## Pipeline: SAS Programs
 
-Run sequentially — Steps 3–5 depend on WORK datasets from prior steps.
+Run sequentially -- Steps 3 and 5 depend on WORK datasets from prior steps.
 
 ### Step 2: `step2_inventory.sas`
 
 Verifies table structure, column names, diagnosis field availability, ZIP format, and key fields before any cohort-building begins. Confirms:
 
 - `mc017` is the service date (not `mc015`, which is a place-of-service code)
-- Diagnosis columns `mc039`, `mc041`–`mc053` contain ICD-10-CM strings (not `mc022`/`mc023`, which are numeric category codes)
+- Diagnosis columns `mc039`, `mc041`-`mc053` contain ICD-10-CM strings (not `mc022`/`mc023`, which are numeric category codes)
 - `me107` exists on MEMBER table for MEST linkage
 - `APCD_UNIQUE_ID` exists on BEN_SUM for cross-source deduplication
 - ZIP codes (`me017`, `mc016`, `zip_cd`) are 5-digit format
 
-### Step 3: `step3_diabetes_cohort.sas`
+### Step 3: `step3_cohort.sas`
 
-Identifies the diabetes cohort by scanning all diagnosis fields for ICD-10-CM codes:
+Combined diabetes cohort + DFU identification in a single optimized pass. Uses **explicit SQL passthrough** (`connect to odbc` / `connection to odbc`) to push all WHERE filtering to the database server, halving table scans from ~30 to ~15.
 
+**Diabetes identification:**
 - **T1D**: `E10.x` in any DX position
 - **T2D**: `E11.x` in any DX position
 - **AMBIGUOUS**: Both `E10.x` and `E11.x` present across claims for the same patient
 
-Commercial claims use a **3-field composite key** (`mc001` + `mc006` + `mc009`) as the person identifier — using `mc009` alone collapses to ~170 apparent patients.
-
-### Step 4: `step4_dfu_identification.sas`
-
-Identifies DFU cases among the diabetes cohort using two code families:
-
+**DFU identification** (restricted to DM patients):
 - **L97.x**: Ulcer of lower limb codes (primary DFU identifier)
 - **Combo codes**: `E10.621`, `E10.622`, `E11.621`, `E11.622` (diabetes with foot ulcer)
+- Classifies DFU source: `BOTH`, `L97_ONLY`, `COMBO_ONLY`
+- Extracts severity from L97 code (6th character): Rank 1-4
 
-Classifies DFU source as:
-- `BOTH` — patient has both L97 and combo codes
-- `L97_ONLY` — only L97 codes found
-- `COMBO_ONLY` — only combo codes found
+**Architecture:**
+- 8 commercial passthrough queries (one per year table 2017-2024)
+- 7 Medicare passthrough queries (one per claim table)
+- Each query scans for DM and DFU codes simultaneously
+- SAS-side aggregation produces 4 WORK datasets for step 5
+- Temp tables deleted after aggregation to free memory
 
-Extracts severity from L97 code structure (6th character):
-- Rank 1: Limited to skin breakdown
-- Rank 2: Fat layer exposed
-- Rank 3: Necrosis of muscle
-- Rank 4: Necrosis of bone
+Commercial claims use a **3-field composite key** (`mc001` + `mc006` + `mc009`) as the person identifier.
 
 ### Step 5: `step5_zip_extract.sas`
 
 The most complex step, handling:
 
-1. **ZIP extraction**: MEMBER.me017 (preferred) → CLAIM.mc016 (fallback) for commercial; BEN_SUM.zip_cd for Medicare
+1. **ZIP extraction**: MEMBER.me017 (preferred) -> CLAIM.mc016 (fallback) for commercial; BEN_SUM.zip_cd for Medicare
 2. **Arkansas filtering**: Restricts to AR ZIPs (prefixes `71` and `72`)
-3. **Sex harmonization**: Commercial `me028` (already M/F) and Medicare `sex_ident_cd` (1→M, 2→F, else→U)
-4. **MEST linkage**: Commercial patients linked via MEMBER(me001+me107) → MEST → `apcd_unique_id`
+3. **Sex harmonization**: Commercial `me028` (already M/F) and Medicare `sex_ident_cd` (1->M, 2->F, else->U)
+4. **MEST linkage**: Commercial patients linked via MEMBER(me001+me107) -> MEST -> `apcd_unique_id`
 5. **Cross-source dedup**: `study_id` = `apcd_unique_id` + gender, shared across commercial and Medicare
 6. **DFU source classification**: Derived `dfu_source` column (BOTH/L97_ONLY/COMBO_ONLY)
 
-**Output CSVs** (produced twice — pre- and post-dedup with study_id):
+**Output CSVs** (produced twice -- pre- and post-dedup with study_id):
 
 | File | Contents |
 |------|----------|
@@ -103,13 +98,13 @@ The most complex step, handling:
 
 ```
 CLAIM (mc001 + mc006 + mc009)
-  → MEMBER (me001 + me006 + me010)
-    → MEST (submitter=me001 + member_id=me107)
-      → study_id = apcd_unique_id || gender
+  -> MEMBER (me001 + me006 + me010)
+    -> MEST (submitter=me001 + member_id=me107)
+      -> study_id = apcd_unique_id || gender
 
 Medicare FFS:
-  BENE_ID → BEN_SUM.APCD_UNIQUE_ID
-    → study_id = apcd_unique_id || harmonized_gender  [1→M, 2→F, else→U]
+  BENE_ID -> BEN_SUM.APCD_UNIQUE_ID
+    -> study_id = apcd_unique_id || harmonized_gender  [1->M, 2->F, else->U]
 ```
 
 Cross-source duplicates = matched `study_id` across MEST and BEN_SUM.
@@ -118,13 +113,14 @@ Cross-source duplicates = matched `study_id` across MEST and BEN_SUM.
 
 | Constraint | Rationale |
 |-----------|-----------|
-| Use `mc039`, `mc041`–`mc053` for DX — never `mc022`/`mc023` | Data dictionary is wrong; those are numeric category codes |
-| Use `mc017` for commercial date — never `mc015` | `mc015` is a 2-digit place-of-service code |
+| Use `mc039`, `mc041`-`mc053` for DX -- never `mc022`/`mc023` | Data dictionary is wrong; those are numeric category codes |
+| Use `mc017` for commercial date -- never `mc015` | `mc015` is a 2-digit place-of-service code |
 | 3-field composite key for commercial persons | `mc009` alone collapses to ~170 records |
 | Exclude 2025 from panel | Partial year creates false cold spot in EHSA |
 | ICD codes stored without dots | Server stores `L97522` not `L97.522`; confirmed against local sample |
-| Keep AMBIGUOUS diabetes type as separate category | Do not collapse into T1D or T2D in SAS — decide at R stage |
-| Arkansas ZIP filter: prefixes 71 and 72 | Covers full AR ZIP range (71601–72959) |
+| Keep AMBIGUOUS diabetes type as separate category | Do not collapse into T1D or T2D in SAS -- decide at R stage |
+| Arkansas ZIP filter: prefixes 71 and 72 | Covers full AR ZIP range (71601-72959) |
+| Explicit SQL passthrough for claim scanning | Pushes filtering to database; avoids pulling billions of rows through ODBC |
 
 ## Downstream Pipeline (Not in This Repository)
 
@@ -132,9 +128,9 @@ The R pipeline (under development) will:
 
 - Combine and deduplicate commercial + Medicare on `study_id`
 - Apply HUD ZIP-to-ZCTA crosswalk (2020 vintage throughout)
-- Aggregate to ZCTA-year panel (2017–2024)
+- Aggregate to ZCTA-year panel (2017-2024)
 - Apply empirical Bayes spatial smoothing (critical for sparse rural ZCTAs)
-- Attach ACS covariates (disaggregated: pct_black, pct_native — not composite pct_minority)
+- Attach ACS covariates (disaggregated: pct_black, pct_native -- not composite pct_minority)
 - Build adaptive KNN spatial weights (k=8, not Queen contiguity)
 - Export for ArcGIS Pro Emerging Hot Spot Analysis
 - Fit spatial panel regression (splm) on smoothed DFU rates
@@ -148,7 +144,7 @@ The R pipeline (under development) will:
 
 ## Author
 
-William Watson — PhD Dissertation, Medical Geography
+William Watson -- PhD Dissertation, Medical Geography
 University of Arkansas for Medical Sciences (UAMS)
 
 ## License
