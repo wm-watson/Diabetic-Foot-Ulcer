@@ -6,6 +6,7 @@
    - Replaced ROW_NUMBER() OVER with GROUP BY (SAS SQL limitation)
    - Output to D:\WPWatson instead of Mac path
    - Database-heavy lookups use passthrough with GROUP BY
+   - Added procedure fields (debridement, amputation) from step3
 
  Architecture:
    Part A: Passthrough extractions (MEMBER, BEN_SUM, MEST, claim ZIP)
@@ -146,6 +147,13 @@ proc sql;
            f.ever_l97,
            f.ever_dm_combo,
            f.max_severity_rank,
+           /* Procedure flags */
+           coalesce(f.has_debridement, 0) as has_debridement,
+           f.first_debride_date,
+           coalesce(f.n_debride_claims, 0) as n_debride_claims,
+           coalesce(f.has_amputation, 0) as has_amputation,
+           f.first_amp_date,
+           coalesce(f.n_amp_claims, 0) as n_amp_claims,
            /* MEST linkage: MEMBER.me107 -> MEST -> study_id */
            case when t.apcd_unique_id is not null and t.apcd_unique_id ne ''
                 then catx('', t.apcd_unique_id, t.gender)
@@ -202,6 +210,13 @@ proc sql;
            f.ever_l97,
            f.ever_dm_combo,
            f.max_severity_rank,
+           /* Procedure flags */
+           coalesce(f.has_debridement, 0) as has_debridement,
+           f.first_debride_date,
+           coalesce(f.n_debride_claims, 0) as n_debride_claims,
+           coalesce(f.has_amputation, 0) as has_amputation,
+           f.first_amp_date,
+           coalesce(f.n_amp_claims, 0) as n_amp_claims,
            /* Study ID from BEN_SUM.apcd_unique_id + harmonized gender */
            case when b.apcd_unique_id is not null and b.apcd_unique_id ne ''
                 then catx('', b.apcd_unique_id,
@@ -333,6 +348,13 @@ proc sql;
                 when coalesce(ever_dm_combo,0)=1 then 'COMBO_ONLY'
                 else '' end as dfu_source length=12,
            coalesce(max_severity_rank, 0) as severity_rank,
+           /* Procedure flags */
+           has_debridement,
+           first_debride_date,
+           n_debride_claims,
+           has_amputation,
+           first_amp_date,
+           n_amp_claims,
            substr(strip(zip_final), 1, 5) as ar_zip length=5,
            zip_source length=10,
            state_member as state length=5,
@@ -372,6 +394,13 @@ proc sql;
                 when coalesce(ever_dm_combo,0)=1 then 'COMBO_ONLY'
                 else '' end as dfu_source,
            coalesce(max_severity_rank, 0),
+           /* Procedure flags */
+           has_debridement,
+           first_debride_date,
+           n_debride_claims,
+           has_amputation,
+           first_amp_date,
+           n_amp_claims,
            substr(strip(zip_final), 1, 5) as ar_zip length=5,
            zip_source,
            state_member as state,
@@ -417,7 +446,10 @@ run;
 /* --- dfu_commercial.csv --- */
 proc export data=dm_dfu_analytic(
     where=(data_source='COMMERCIAL' and has_dfu=1)
-    keep=patient_id study_id first_dfu_date dfu_source severity_rank days_dm_to_dfu
+    keep=patient_id study_id first_dfu_date dfu_source severity_rank
+         has_debridement first_debride_date n_debride_claims
+         has_amputation first_amp_date n_amp_claims
+         days_dm_to_dfu
 )   outfile="&outdir.\dfu_commercial.csv"
     dbms=csv replace;
 run;
@@ -425,7 +457,10 @@ run;
 /* --- dfu_medicare.csv --- */
 proc export data=dm_dfu_analytic(
     where=(data_source='MEDICARE' and has_dfu=1)
-    keep=patient_id study_id first_dfu_date dfu_source severity_rank days_dm_to_dfu
+    keep=patient_id study_id first_dfu_date dfu_source severity_rank
+         has_debridement first_debride_date n_debride_claims
+         has_amputation first_amp_date n_amp_claims
+         days_dm_to_dfu
 )   outfile="&outdir.\dfu_medicare.csv"
     dbms=csv replace;
 run;
@@ -501,6 +536,52 @@ proc sql;
     group by data_source;
 quit;
 
+title "Step 5G-6: Procedure Code Summary - DFU Patients by Source";
+proc sql;
+    select data_source,
+           count(*) as n_dfu format=comma12.,
+           sum(has_debridement) as with_debridement format=comma12.,
+           sum(has_amputation) as with_amputation format=comma12.,
+           sum(case when has_debridement = 1 or ever_dm_combo = 1
+                    then 1 else 0 end) as tier2_eligible format=comma12.,
+           sum(ever_dm_combo) as with_combo_code format=comma12.
+    from dm_dfu_analytic
+    where has_dfu = 1
+    group by data_source;
+quit;
+
+title "Step 5G-7: DFU Case Definition Tier Distribution (All DFU Patients)";
+proc sql;
+    select data_source,
+           case when ever_dm_combo = 1 and has_debridement = 1 then 'COMBO+DEBRIDE'
+                when ever_dm_combo = 1 then 'COMBO_ONLY'
+                when has_debridement = 1 then 'L97+DEBRIDE'
+                else 'L97_ONLY'
+           end as dfu_evidence length=20,
+           count(*) as n_patients format=comma12.
+    from dm_dfu_analytic
+    where has_dfu = 1
+    group by data_source, calculated dfu_evidence
+    order by data_source, dfu_evidence;
+quit;
+
+title "Step 5G-8: Amputation Summary - DFU Patients";
+proc sql;
+    select data_source,
+           sum(has_amputation) as n_with_amp format=comma12.,
+           sum(case when has_amputation = 1 and first_amp_date is not null
+                     and first_dfu_date is not null
+                then case when first_amp_date >= first_dfu_date then 1 else 0 end
+                else 0 end) as amp_after_dfu format=comma12.,
+           sum(case when has_amputation = 1 and first_amp_date is not null
+                     and first_dfu_date is not null
+                then case when first_amp_date < first_dfu_date then 1 else 0 end
+                else 0 end) as amp_before_dfu format=comma12.
+    from dm_dfu_analytic
+    where has_dfu = 1
+    group by data_source;
+quit;
+
 title;
 
 /* ======================================================================= */
@@ -548,4 +629,14 @@ quit;
  5. SEX HARMONIZATION:
     Commercial me028: already M/F
     Medicare sex_ident_cd: 1->M, 2->F, else->U
+
+ 6. PROCEDURE FIELDS: Debridement and amputation flags flow from step3
+    DFU cohort datasets. For non-DFU patients, these are 0/null.
+    - has_debridement, first_debride_date, n_debride_claims
+    - has_amputation, first_amp_date, n_amp_claims
+
+ 7. DFU TIER REPORTING: Step 5G-7 shows the tier-eligible distribution
+    but does NOT assign a tier column. Tier assignment (Tier 1/2/3)
+    happens in the R pipeline where temporal windows can be applied
+    (e.g., debridement within +/-30 days of DFU claim).
 *****************************************************************************/
