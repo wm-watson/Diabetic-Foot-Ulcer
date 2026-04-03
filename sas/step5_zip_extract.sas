@@ -147,13 +147,13 @@ proc sql;
            f.ever_l97,
            f.ever_dm_combo,
            f.max_severity_rank,
-           /* Procedure flags */
-           coalesce(f.has_debridement, 0) as has_debridement,
-           f.first_debride_date,
-           coalesce(f.n_debride_claims, 0) as n_debride_claims,
-           coalesce(f.has_amputation, 0) as has_amputation,
-           f.first_amp_date,
-           coalesce(f.n_amp_claims, 0) as n_amp_claims,
+           /* Procedure flags (from DM cohort — covers ALL diabetics, not just DFU) */
+           d.has_debridement,
+           d.first_debride_date,
+           d.n_debride_claims,
+           d.has_amputation,
+           d.first_amp_date,
+           d.n_amp_claims,
            /* MEST linkage: MEMBER.me107 -> MEST -> study_id */
            case when t.apcd_unique_id is not null and t.apcd_unique_id ne ''
                 then catx('', t.apcd_unique_id, t.gender)
@@ -210,13 +210,13 @@ proc sql;
            f.ever_l97,
            f.ever_dm_combo,
            f.max_severity_rank,
-           /* Procedure flags */
-           coalesce(f.has_debridement, 0) as has_debridement,
-           f.first_debride_date,
-           coalesce(f.n_debride_claims, 0) as n_debride_claims,
-           coalesce(f.has_amputation, 0) as has_amputation,
-           f.first_amp_date,
-           coalesce(f.n_amp_claims, 0) as n_amp_claims,
+           /* Procedure flags (from DM cohort — covers ALL diabetics, not just DFU) */
+           d.has_debridement,
+           d.first_debride_date,
+           d.n_debride_claims,
+           d.has_amputation,
+           d.first_amp_date,
+           d.n_amp_claims,
            /* Study ID from BEN_SUM.apcd_unique_id + harmonized gender */
            case when b.apcd_unique_id is not null and b.apcd_unique_id ne ''
                 then catx('', b.apcd_unique_id,

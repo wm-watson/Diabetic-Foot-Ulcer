@@ -14,52 +14,49 @@
    - All intermediates deleted after use
 
  Architecture:
-   Part A: Helper macros (DX field conditions + severity + procedure codes)
-   Part B: Commercial passthrough w/ GROUP BY (8 year tables -> D:\WPWatson)
-   Part C: Commercial final aggregation -> WORK.dm/dfu_cohort_commercial
-   Part D: Medicare passthrough w/ GROUP BY (7 claim tables -> D:\WPWatson)
-   Part D2: Medicare HCPCS from carrier line table (debridement + amputation)
-   Part E: Medicare final aggregation -> WORK.dm/dfu_cohort_medicare
-   Part F: Cross-validation with BEN_SUM_CC
-   Part G: Summary reports + cleanup
+   Part A:  Helper macros (DX field conditions + severity)
+   Part B:  Commercial passthrough w/ GROUP BY (8 year tables -> D:\WPWatson)
+   Part C:  Commercial final aggregation -> WORK.dm/dfu_cohort_commercial
+   Part D:  Medicare passthrough w/ GROUP BY (7 claim tables -> D:\WPWatson)
+   Part E:  Medicare final aggregation -> WORK.dm/dfu_cohort_medicare
+   Part F:  Cross-validation with BEN_SUM_CC
+   Part P1: Commercial procedure extraction (standalone, procedure-code-filtered)
+   Part P2: Medicare procedure extraction (standalone, procedure-code-filtered)
+   Part P3: Join procedures to DM + DFU cohorts (restricts to DM patients)
+   Part G:  Summary reports + cleanup
 
  ICD-10-CM Codes:
    Diabetes:  E10.x (T1D), E11.x (T2D)
    DFU:       L97.1xx-L97.9xx (non-pressure chronic ulcer of lower limb)
    DFU combo: E10.621, E10.622, E11.621, E11.622
 
- Procedure Codes:
+ Procedure Codes (extracted from all claims, then restricted to DM patients in P3):
    Debridement CPT: 97597-97598 (selective), 11042-11047 (excisional), 97602
    Amputation CPT:  27590-27598 (above-knee), 28800-28825 (below-knee/toe)
    Amputation PCS:  0Y6x (ICD-10-PCS detachment of lower extremity)
 
+ Procedure Fields:
+   Commercial CPT/HCPCS:  mc055 (NOT mc024 which is NPI)
+   Commercial ICD-10-PCS: mc058
+   Medicare carrier line:  hcpcs_cd on APCD_MCR_PRTB_CAR_LIN (date: line_1st_expns_dt)
+   Medicare outpatient rev: hcpcs_cd on APCD_MCR_OUT_REV (date: rev_cntr_dt)
+   Medicare INP/SNF claim: icd_prcdr_cd1..25 on APCD_MCR_INP_CLM / SNF_CLM
+
  Output (4 WORK datasets consumed by step5):
    dm_cohort_commercial:  submitter, group_policy, person_code, dm_type,
-                          first_dm_year, last_dm_year, n_dm_claims, first_dm_date
+                          first_dm_year, last_dm_year, n_dm_claims, first_dm_date,
+                          has_debridement, first_debride_date, n_debride_claims,
+                          has_amputation, first_amp_date, n_amp_claims
    dm_cohort_medicare:    bene_id, dm_type, first_dm_year, last_dm_year,
-                          n_dm_claims, first_dm_date
+                          n_dm_claims, first_dm_date,
+                          has_debridement, first_debride_date, n_debride_claims,
+                          has_amputation, first_amp_date, n_amp_claims
    dfu_cohort_commercial: submitter, group_policy, person_code, first_dfu_year,
                           first_dfu_date, last_dfu_year, n_dfu_claims,
                           ever_l97, ever_dm_combo, max_severity_rank,
                           has_debridement, first_debride_date, n_debride_claims,
                           has_amputation, first_amp_date, n_amp_claims
-   dfu_cohort_medicare:   bene_id, first_dfu_year, first_dfu_date, last_dfu_year,
-                          n_dfu_claims, ever_l97, ever_dm_combo, max_severity_rank,
-                          has_debridement, first_debride_date, n_debride_claims,
-                          has_amputation, first_amp_date, n_amp_claims
-
- Person Keys:
-   Commercial: mc001 (submitter) + mc006 (group/policy) + mc009 (person seq)
-   Medicare:   bene_id
-
- DX Fields:
-   Commercial (14): mc039 (admitting), mc041 (principal), mc042-mc053
-   Medicare: prncpal_dgns_cd + icd_dgns_cd1..N [+ admtg_dgns_cd on INP/SNF]
-
- Procedure Fields:
-   Commercial: mc024 (CPT/HCPCS)
-   Medicare claim-level: icd_prcdr_cd1..25 (ICD-10-PCS, on INP/SNF only)
-   Medicare line-level: hcpcs_cd (on APCD_MCR_PRTB_CAR_LIN)
+   dfu_cohort_medicare:   bene_id, (same procedure fields as commercial)
 
  NOTE: Passthrough SQL uses PostgreSQL syntax (length(), extract()).
        If the database is SQL Server, replace length() with len() and
@@ -125,16 +122,6 @@ libname arapcd odbc
     end
 %mend;
 
-/*--- Commercial: Debridement CPT in mc024 ---*/
-%macro comm_proc_debride;
-    upper(mc024) in (&q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,&q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.)
-%mend;
-
-/*--- Commercial: Amputation CPT in mc024 ---*/
-%macro comm_proc_amp;
-    upper(mc024) in (&q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,&q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.)
-%mend;
-
 /*--- Medicare: LIKE 'prefix%' across prncpal + icd_dgns_cd1..N [+admtg] ---*/
 %macro mcr_like(prefix, max_dx, has_admtg);
     %if &has_admtg = 1 %then %do;
@@ -180,19 +167,11 @@ libname arapcd odbc
     end
 %mend;
 
-/*--- Medicare: ICD-10-PCS amputation (0Y6x) across icd_prcdr_cd fields ---*/
-/*    Only INP and SNF claim tables have these fields.                      */
-%macro mcr_pcs_amp(max_prcdr);
-    upper(icd_prcdr_cd1) like &q.0Y6%&q.
-    %do i = 2 %to &max_prcdr;
-        or upper(icd_prcdr_cd&i.) like &q.0Y6%&q.
-    %end;
-%mend;
-
 /* ======================================================================= */
 /* PART B: Commercial Passthrough with GROUP BY (2017-2024)                 */
 /*   Each query returns 1 row per patient per year (not per claim).         */
 /*   Results appended incrementally to mylib.comm_patient_year.             */
+/*   DX-only — procedure codes extracted separately in Part P1.             */
 /* ======================================================================= */
 
 %macro get_comm(yr, first=0);
@@ -221,15 +200,7 @@ libname arapcd odbc
                    min(case when (%comm_like(L97)) or (%comm_in_combo)
                             then mc017 else null end) as first_dfu_date,
                    /* Worst L97 severity this year */
-                   max(%comm_row_severity) as max_severity_rank,
-                   /* Debridement procedure flags (CPT in mc024) */
-                   max(case when (%comm_proc_debride) then 1 else 0 end) as has_debridement,
-                   sum(case when (%comm_proc_debride) then 1 else 0 end) as n_debride_claims,
-                   min(case when (%comm_proc_debride) then mc017 else null end) as first_debride_date,
-                   /* Amputation procedure flags (CPT in mc024) */
-                   max(case when (%comm_proc_amp) then 1 else 0 end) as has_amputation,
-                   sum(case when (%comm_proc_amp) then 1 else 0 end) as n_amp_claims,
-                   min(case when (%comm_proc_amp) then mc017 else null end) as first_amp_date
+                   max(%comm_row_severity) as max_severity_rank
             from public.CLAIM_SVC_DT_&yr.
             where (%comm_like(E10))
                or (%comm_like(E11))
@@ -291,7 +262,7 @@ proc sql;
     having max(has_t1d) = 1 or max(has_t2d) = 1;
 quit;
 
-/* C-2: DFU cohort — restricted to DM patients */
+/* C-2: DFU cohort — restricted to DM patients (no procedure fields yet) */
 proc sql;
     create table dfu_cohort_commercial as
     select a.submitter,
@@ -306,14 +277,6 @@ proc sql;
            max(a.has_l97) as ever_l97,
            max(a.has_dm_combo) as ever_dm_combo,
            max(a.max_severity_rank) as max_severity_rank,
-           /* Debridement procedure flags */
-           max(a.has_debridement) as has_debridement,
-           min(a.first_debride_date) as first_debride_date format=yymmdd10.,
-           sum(a.n_debride_claims) as n_debride_claims,
-           /* Amputation procedure flags */
-           max(a.has_amputation) as has_amputation,
-           min(a.first_amp_date) as first_amp_date format=yymmdd10.,
-           sum(a.n_amp_claims) as n_amp_claims,
            'COMMERCIAL' as data_source length=10
     from mylib.comm_patient_year a
     inner join dm_cohort_commercial b
@@ -338,12 +301,10 @@ quit;
 /* ======================================================================= */
 /* PART D: Medicare Passthrough with GROUP BY (7 claim tables)              */
 /*   Each query returns 1 row per patient per table (not per claim).        */
-/*   Year stats computed via extract(year from clm_from_dt).                */
-/*   Date filter: clm_from_dt < '2025-01-01' (= year <= 2024).             */
-/*   max_prcdr: number of icd_prcdr_cd fields (25 for INP/SNF, 0 others)   */
+/*   DX-only — procedure codes extracted separately in Part P2.             */
 /* ======================================================================= */
 
-%macro get_mcr(name, tbl, max_dx, has_admtg, max_prcdr=0, first=0);
+%macro get_mcr(name, tbl, max_dx, has_admtg, first=0);
     proc sql;
         connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
         create table _mcr_tbl as
@@ -392,17 +353,6 @@ quit;
                        as last_dfu_year,
                    /* Worst L97 severity */
                    max(%mcr_row_severity(&max_dx., &has_admtg.)) as max_severity_rank
-                   /* ICD-10-PCS amputation (INP/SNF only) */
-                   %if &max_prcdr. > 0 %then %do;
-                       ,max(case when (%mcr_pcs_amp(&max_prcdr.)) then 1 else 0 end) as has_amp_pcs
-                       ,sum(case when (%mcr_pcs_amp(&max_prcdr.)) then 1 else 0 end) as n_amp_pcs_claims
-                       ,min(case when (%mcr_pcs_amp(&max_prcdr.)) then clm_from_dt else null end) as first_amp_pcs_date
-                   %end;
-                   %else %do;
-                       ,0 as has_amp_pcs
-                       ,0 as n_amp_pcs_claims
-                       ,cast(null as date) as first_amp_pcs_date
-                   %end;
             from public.APCD_MCR_&tbl._CLM
             where ((%mcr_like(E10, &max_dx., &has_admtg.))
                 or (%mcr_like(E11, &max_dx., &has_admtg.))
@@ -427,110 +377,34 @@ quit;
     %put NOTE: Medicare &name. (&tbl.) complete.;
 %mend;
 
-/* Part B Carrier: 12 DX fields, no admtg_dgns_cd, no ICD-10-PCS */
-%get_mcr(prtb, PRTB_CAR, 12, 0, max_prcdr=0, first=1);
+/* Part B Carrier: 12 DX fields, no admtg_dgns_cd */
+%get_mcr(prtb, PRTB_CAR, 12, 0, first=1);
 
-/* Outpatient: 25 DX fields, no ICD-10-PCS on claim table */
-%get_mcr(out, OUT, 25, 0, max_prcdr=0);
+/* Outpatient: 25 DX fields */
+%get_mcr(out, OUT, 25, 0);
 
-/* Inpatient: 25 DX fields + admtg_dgns_cd + 25 ICD-10-PCS procedure codes */
-%get_mcr(inp, INP, 25, 1, max_prcdr=25);
+/* Inpatient: 25 DX fields + admtg_dgns_cd */
+%get_mcr(inp, INP, 25, 1);
 
-/* SNF: 25 DX fields + admtg_dgns_cd + 25 ICD-10-PCS procedure codes */
-%get_mcr(snf, SNF, 25, 1, max_prcdr=25);
+/* SNF: 25 DX fields + admtg_dgns_cd */
+%get_mcr(snf, SNF, 25, 1);
 
 /* HHA: 25 DX fields */
-%get_mcr(hha, HHA, 25, 0, max_prcdr=0);
+%get_mcr(hha, HHA, 25, 0);
 
 /* Hospice: 25 DX fields */
-%get_mcr(hsp, HSP, 25, 0, max_prcdr=0);
+%get_mcr(hsp, HSP, 25, 0);
 
 /* DME: 12 DX fields */
-%get_mcr(dme, DME, 12, 0, max_prcdr=0);
+%get_mcr(dme, DME, 12, 0);
 
 /* ======================================================================= */
-/* PART D2: Medicare HCPCS from Carrier Line Table                          */
-/*   Separate query for debridement + amputation CPT codes.                 */
-/*   These are on the line-level table, not the claim-level table.          */
-/*                                                                          */
-/*   NOTE: Table and field names are assumed based on standard CMS layout.  */
-/*   If this query errors, verify on the server:                            */
-/*     - Table name: APCD_MCR_PRTB_CAR_LIN (may differ in your APCD)       */
-/*     - HCPCS field: hcpcs_cd                                              */
-/*     - Date field: clm_from_dt (might be line_1st_expns_dt)               */
-/*     - Patient key: bene_id (might need join via clm_id to claim table)   */
-/*   If this section fails, comment it out — Part E will use an empty       */
-/*   placeholder and debridement/amputation for Medicare will be incomplete. */
-/* ======================================================================= */
-
-proc sql;
-    connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
-    create table mylib._mcr_hcpcs as
-    select * from connection to odbc (
-        select bene_id,
-               /* Debridement HCPCS */
-               max(case when upper(hcpcs_cd) in (
-                   &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
-                   &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
-               ) then 1 else 0 end) as has_debridement,
-               sum(case when upper(hcpcs_cd) in (
-                   &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
-                   &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
-               ) then 1 else 0 end) as n_debride_claims,
-               min(case when upper(hcpcs_cd) in (
-                   &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
-                   &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
-               ) then clm_from_dt else null end) as first_debride_date,
-               /* Amputation CPT */
-               max(case when upper(hcpcs_cd) in (
-                   &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
-                   &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
-               ) then 1 else 0 end) as has_amp_cpt,
-               sum(case when upper(hcpcs_cd) in (
-                   &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
-                   &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
-               ) then 1 else 0 end) as n_amp_cpt_claims,
-               min(case when upper(hcpcs_cd) in (
-                   &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
-                   &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
-               ) then clm_from_dt else null end) as first_amp_cpt_date
-        from public.APCD_MCR_PRTB_CAR_LIN
-        where upper(hcpcs_cd) in (
-            &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
-            &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.,
-            &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
-            &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
-        )
-        and clm_from_dt < &q.2025-01-01&q.
-        group by bene_id
-    );
-    disconnect from odbc;
-quit;
-%put NOTE: D2 Medicare HCPCS extraction complete.;
-
-/* Safety: if D2 failed, create empty placeholder so Part E doesn't break */
-%macro check_mcr_hcpcs;
-    %if %sysfunc(exist(mylib._mcr_hcpcs)) = 0 %then %do;
-        data mylib._mcr_hcpcs;
-            length bene_id $50;
-            format first_debride_date first_amp_cpt_date yymmdd10.;
-            has_debridement = 0; n_debride_claims = 0; first_debride_date = .;
-            has_amp_cpt = 0; n_amp_cpt_claims = 0; first_amp_cpt_date = .;
-            delete;
-        run;
-        %put WARNING: _mcr_hcpcs not created by D2 — using empty placeholder.;
-        %put WARNING: Check carrier line table name and field names on server.;
-    %end;
-%mend;
-%check_mcr_hcpcs;
-
-/* ======================================================================= */
-/* PART E: Medicare Final Aggregation (across all 7 tables + HCPCS)         */
+/* PART E: Medicare Final Aggregation (across all 7 tables)                 */
 /*   A patient may appear in multiple tables; combine their stats.          */
-/*   HCPCS debridement/amputation joined from mylib._mcr_hcpcs.            */
+/*   NO procedure fields — those come from Part P2.                         */
 /* ======================================================================= */
 
-/* E-1: Diabetes cohort (unchanged — no procedure fields needed) */
+/* E-1: Diabetes cohort */
 proc sql;
     create table dm_cohort_medicare as
     select bene_id,
@@ -550,7 +424,7 @@ proc sql;
     having max(has_t1d) = 1 or max(has_t2d) = 1;
 quit;
 
-/* E-2: DFU cohort — restricted to DM patients, with procedure flags */
+/* E-2: DFU cohort — restricted to DM patients (no procedure fields yet) */
 proc sql;
     create table dfu_cohort_medicare as
     select a.bene_id,
@@ -561,37 +435,16 @@ proc sql;
            max(a.has_l97) as ever_l97,
            max(a.has_dm_combo) as ever_dm_combo,
            max(a.max_severity_rank) as max_severity_rank,
-           /* Debridement from carrier line HCPCS */
-           max(coalesce(h.has_debridement, 0)) as has_debridement,
-           min(h.first_debride_date) as first_debride_date format=yymmdd10.,
-           max(coalesce(h.n_debride_claims, 0)) as n_debride_claims,
-           /* Amputation: combine ICD-10-PCS (from INP/SNF) + CPT (from carrier line) */
-           case when max(a.has_amp_pcs) = 1
-                  or max(coalesce(h.has_amp_cpt, 0)) = 1
-                then 1 else 0 end as has_amputation,
-           case when min(a.first_amp_pcs_date) is not null
-                     and max(h.first_amp_cpt_date) is not null
-                then case when min(a.first_amp_pcs_date) <= max(h.first_amp_cpt_date)
-                          then min(a.first_amp_pcs_date)
-                          else max(h.first_amp_cpt_date) end
-                when min(a.first_amp_pcs_date) is not null
-                then min(a.first_amp_pcs_date)
-                else max(h.first_amp_cpt_date)
-           end as first_amp_date format=yymmdd10.,
-           sum(a.n_amp_pcs_claims) + max(coalesce(h.n_amp_cpt_claims, 0))
-               as n_amp_claims,
            'MEDICARE' as data_source length=10
     from mylib.mcr_patient_tbl a
     inner join dm_cohort_medicare b
         on a.bene_id = b.bene_id
-    left join mylib._mcr_hcpcs h
-        on a.bene_id = h.bene_id
     where a.has_l97 = 1 or a.has_dm_combo = 1
     group by a.bene_id;
 quit;
 
-/* Free Medicare intermediates */
-proc datasets lib=mylib nolist; delete mcr_patient_tbl _mcr_hcpcs; quit;
+/* Free Medicare intermediate */
+proc datasets lib=mylib nolist; delete mcr_patient_tbl; quit;
 
 title "Step 3E: Medicare Cohort Counts";
 proc sql;
@@ -630,6 +483,402 @@ proc sql;
     where (b.diabetes is not null and b.diabetes ne '')
       and a.bene_id is null;
 quit;
+
+/* ======================================================================= */
+/* PART P1: Commercial Procedure Extraction                                 */
+/*   Scans commercial claims for debridement + amputation CPT/PCS.          */
+/*   Filtered by procedure code WHERE clause (very selective, returns small */
+/*   result set). Restriction to DM patients happens in Part P3 via join.   */
+/*   mc055 = CPT/HCPCS, mc058 = ICD-10-PCS, mc017 = service date           */
+/*   Produces 1 row per patient across all years.                           */
+/* ======================================================================= */
+
+%macro get_comm_proc(yr, first=0);
+    proc sql;
+        connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+        create table _comm_proc_yr as
+        select * from connection to odbc (
+            select mc001 as submitter,
+                   mc006 as group_policy,
+                   mc009 as person_code,
+                   /* Debridement CPT (mc055) */
+                   max(case when upper(mc055) in (
+                       &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                       &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+                   ) then 1 else 0 end) as has_debridement,
+                   sum(case when upper(mc055) in (
+                       &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                       &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+                   ) then 1 else 0 end) as n_debride_claims,
+                   min(case when upper(mc055) in (
+                       &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                       &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+                   ) then mc017 else null end) as first_debride_date,
+                   /* Amputation CPT (mc055) */
+                   max(case when upper(mc055) in (
+                       &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                       &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+                   ) then 1 else 0 end) as has_amp_cpt,
+                   sum(case when upper(mc055) in (
+                       &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                       &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+                   ) then 1 else 0 end) as n_amp_cpt_claims,
+                   min(case when upper(mc055) in (
+                       &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                       &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+                   ) then mc017 else null end) as first_amp_cpt_date,
+                   /* Amputation ICD-10-PCS (mc058) */
+                   max(case when upper(mc058) like &q.0Y6%&q. then 1 else 0 end) as has_amp_pcs,
+                   sum(case when upper(mc058) like &q.0Y6%&q. then 1 else 0 end) as n_amp_pcs_claims,
+                   min(case when upper(mc058) like &q.0Y6%&q. then mc017 else null end) as first_amp_pcs_date
+            from public.CLAIM_SVC_DT_&yr.
+            where upper(mc055) in (
+                &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.,
+                &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+            )
+            or upper(mc058) like &q.0Y6%&q.
+            group by mc001, mc006, mc009
+        );
+        disconnect from odbc;
+    quit;
+
+    %if &first = 1 %then %do;
+        data mylib.comm_proc_year; set _comm_proc_yr; run;
+    %end;
+    %else %do;
+        proc append base=mylib.comm_proc_year data=_comm_proc_yr force; run;
+    %end;
+    proc datasets lib=work nolist; delete _comm_proc_yr; quit;
+    %put NOTE: Commercial procedures &yr. complete.;
+%mend;
+
+%get_comm_proc(2017, first=1);
+%get_comm_proc(2018);
+%get_comm_proc(2019);
+%get_comm_proc(2020);
+%get_comm_proc(2021);
+%get_comm_proc(2022);
+%get_comm_proc(2023);
+%get_comm_proc(2024);
+
+/* Aggregate commercial procedures across years */
+proc sql;
+    create table mylib._comm_proc_agg as
+    select submitter, group_policy, person_code,
+           max(has_debridement) as has_debridement,
+           sum(n_debride_claims) as n_debride_claims,
+           min(first_debride_date) as first_debride_date format=yymmdd10.,
+           /* Amputation: combine CPT + PCS */
+           case when max(has_amp_cpt) = 1 or max(has_amp_pcs) = 1
+                then 1 else 0 end as has_amputation,
+           sum(n_amp_cpt_claims) + sum(n_amp_pcs_claims) as n_amp_claims,
+           min(case when first_amp_cpt_date is not null then first_amp_cpt_date
+                    else first_amp_pcs_date end) as first_amp_date format=yymmdd10.
+    from mylib.comm_proc_year
+    group by submitter, group_policy, person_code;
+quit;
+proc datasets lib=mylib nolist; delete comm_proc_year; quit;
+
+%put NOTE: P1 Commercial procedure extraction complete.;
+
+title "Step 3P1: Commercial Procedure Extraction";
+proc sql;
+    select 'Patients with debridement' as metric, count(*) as n format=comma12.
+    from mylib._comm_proc_agg where has_debridement = 1
+    union all
+    select 'Patients with amputation', count(*)
+    from mylib._comm_proc_agg where has_amputation = 1;
+quit;
+
+/* ======================================================================= */
+/* PART P2: Medicare Procedure Extraction                                   */
+/*   Queries 3 sources:                                                     */
+/*     1. APCD_MCR_PRTB_CAR_LIN: hcpcs_cd (debridement + amputation CPT)   */
+/*     2. APCD_MCR_OUT_REV: hcpcs_cd (debridement + amputation CPT)         */
+/*     3. APCD_MCR_INP_CLM: icd_prcdr_cd1..25 (amputation PCS 0Y6x)        */
+/*        APCD_MCR_SNF_CLM: icd_prcdr_cd1..25 (amputation PCS 0Y6x)        */
+/*   Restriction to DM patients happens in Part P3 via INNER JOIN.          */
+/* ======================================================================= */
+
+/* P2-1: Carrier line HCPCS (debridement + amputation CPT) */
+proc sql;
+    connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+    create table mylib._mcr_proc_car as
+    select * from connection to odbc (
+        select bene_id,
+               max(case when upper(hcpcs_cd) in (
+                   &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                   &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+               ) then 1 else 0 end) as has_debridement,
+               sum(case when upper(hcpcs_cd) in (
+                   &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                   &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+               ) then 1 else 0 end) as n_debride_claims,
+               min(case when upper(hcpcs_cd) in (
+                   &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                   &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+               ) then line_1st_expns_dt else null end) as first_debride_date,
+               max(case when upper(hcpcs_cd) in (
+                   &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                   &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+               ) then 1 else 0 end) as has_amp_cpt,
+               sum(case when upper(hcpcs_cd) in (
+                   &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                   &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+               ) then 1 else 0 end) as n_amp_cpt_claims,
+               min(case when upper(hcpcs_cd) in (
+                   &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                   &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+               ) then line_1st_expns_dt else null end) as first_amp_cpt_date
+        from public.APCD_MCR_PRTB_CAR_LIN
+        where (upper(hcpcs_cd) in (
+            &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+            &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.,
+            &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+            &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+        ))
+        and line_1st_expns_dt < &q.2025-01-01&q.
+        group by bene_id
+    );
+    disconnect from odbc;
+quit;
+%put NOTE: P2-1 Carrier line HCPCS complete.;
+
+/* P2-2: Outpatient revenue center HCPCS (debridement + amputation CPT) */
+proc sql;
+    connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+    create table mylib._mcr_proc_out as
+    select * from connection to odbc (
+        select bene_id,
+               max(case when upper(hcpcs_cd) in (
+                   &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                   &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+               ) then 1 else 0 end) as has_debridement,
+               sum(case when upper(hcpcs_cd) in (
+                   &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                   &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+               ) then 1 else 0 end) as n_debride_claims,
+               min(case when upper(hcpcs_cd) in (
+                   &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                   &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+               ) then rev_cntr_dt else null end) as first_debride_date,
+               max(case when upper(hcpcs_cd) in (
+                   &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                   &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+               ) then 1 else 0 end) as has_amp_cpt,
+               sum(case when upper(hcpcs_cd) in (
+                   &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                   &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+               ) then 1 else 0 end) as n_amp_cpt_claims,
+               min(case when upper(hcpcs_cd) in (
+                   &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+                   &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+               ) then rev_cntr_dt else null end) as first_amp_cpt_date
+        from public.APCD_MCR_OUT_REV
+        where (upper(hcpcs_cd) in (
+            &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+            &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.,
+            &q.27590&q.,&q.27591&q.,&q.27592&q.,&q.27594&q.,&q.27596&q.,&q.27598&q.,
+            &q.28800&q.,&q.28805&q.,&q.28810&q.,&q.28820&q.,&q.28825&q.
+        ))
+        and rev_cntr_dt < &q.2025-01-01&q.
+        group by bene_id
+    );
+    disconnect from odbc;
+quit;
+%put NOTE: P2-2 Outpatient revenue HCPCS complete.;
+
+/* P2-3: Inpatient + SNF ICD-10-PCS amputation (0Y6x on icd_prcdr_cd fields) */
+%macro mcr_pcs_amp(max_prcdr);
+    upper(icd_prcdr_cd1) like &q.0Y6%&q.
+    %do i = 2 %to &max_prcdr;
+        or upper(icd_prcdr_cd&i.) like &q.0Y6%&q.
+    %end;
+%mend;
+
+%macro get_mcr_pcs(name, tbl, max_prcdr, first=0);
+    proc sql;
+        connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+        create table _mcr_pcs as
+        select * from connection to odbc (
+            select bene_id,
+                   1 as has_amp_pcs,
+                   count(*) as n_amp_pcs_claims,
+                   min(clm_from_dt) as first_amp_pcs_date
+            from public.APCD_MCR_&tbl._CLM
+            where (%mcr_pcs_amp(&max_prcdr.))
+              and clm_from_dt < &q.2025-01-01&q.
+            group by bene_id
+        );
+        disconnect from odbc;
+    quit;
+
+    %if &first = 1 %then %do;
+        data mylib._mcr_proc_pcs; set _mcr_pcs; run;
+    %end;
+    %else %do;
+        proc append base=mylib._mcr_proc_pcs data=_mcr_pcs force; run;
+    %end;
+    proc datasets lib=work nolist; delete _mcr_pcs; quit;
+    %put NOTE: P2-3 &name. PCS amputation complete.;
+%mend;
+
+%get_mcr_pcs(INP, INP, 25, first=1);
+%get_mcr_pcs(SNF, SNF, 25);
+
+/* P2-4: Combine all Medicare procedure sources */
+proc sql;
+    create table mylib._mcr_proc_agg as
+    select coalesce(c.bene_id, o.bene_id, p.bene_id) as bene_id,
+           /* Debridement: from carrier line + outpatient rev */
+           case when max(coalesce(c.has_debridement, 0)) = 1
+                  or max(coalesce(o.has_debridement, 0)) = 1
+                then 1 else 0 end as has_debridement,
+           sum(coalesce(c.n_debride_claims, 0))
+               + sum(coalesce(o.n_debride_claims, 0)) as n_debride_claims,
+           min(case when c.first_debride_date is not null
+                         and o.first_debride_date is not null
+                    then case when c.first_debride_date <= o.first_debride_date
+                              then c.first_debride_date else o.first_debride_date end
+                    when c.first_debride_date is not null then c.first_debride_date
+                    else o.first_debride_date
+               end) as first_debride_date format=yymmdd10.,
+           /* Amputation: from carrier + outpatient CPT + INP/SNF PCS */
+           case when max(coalesce(c.has_amp_cpt, 0)) = 1
+                  or max(coalesce(o.has_amp_cpt, 0)) = 1
+                  or max(coalesce(p.has_amp_pcs, 0)) = 1
+                then 1 else 0 end as has_amputation,
+           sum(coalesce(c.n_amp_cpt_claims, 0))
+               + sum(coalesce(o.n_amp_cpt_claims, 0))
+               + sum(coalesce(p.n_amp_pcs_claims, 0)) as n_amp_claims,
+           min(c.first_amp_cpt_date, o.first_amp_cpt_date,
+               p.first_amp_pcs_date) as first_amp_date format=yymmdd10.
+    from mylib._mcr_proc_car c
+    full outer join mylib._mcr_proc_out o on c.bene_id = o.bene_id
+    full outer join mylib._mcr_proc_pcs p on coalesce(c.bene_id, o.bene_id) = p.bene_id
+    group by calculated bene_id;
+quit;
+proc datasets lib=mylib nolist;
+    delete _mcr_proc_car _mcr_proc_out _mcr_proc_pcs;
+quit;
+
+%put NOTE: P2 Medicare procedure extraction complete.;
+
+title "Step 3P2: Medicare Procedure Extraction";
+proc sql;
+    select 'Patients with debridement' as metric, count(*) as n format=comma12.
+    from mylib._mcr_proc_agg where has_debridement = 1
+    union all
+    select 'Patients with amputation', count(*)
+    from mylib._mcr_proc_agg where has_amputation = 1;
+quit;
+
+/* ======================================================================= */
+/* PART P3: Join Procedures to DM + DFU Cohorts                             */
+/*   INNER JOIN to DM cohort restricts procedures to diabetic patients.     */
+/*   This implements the "require DM, THEN look for procedures" logic.      */
+/*   P1/P2 returned all patients with procedure codes; P3 keeps only those  */
+/*   who are in the DM cohort (discarding non-diabetic procedure patients). */
+/*                                                                          */
+/*   DM cohorts get: amputation fields (for censoring)                      */
+/*                   debridement fields (for Tier 2 on all DM, carried to   */
+/*                   DFU via step5 merge)                                   */
+/*   DFU cohorts get: debridement + amputation (for Tier 2 + censoring)     */
+/* ======================================================================= */
+
+/* P3-1: Commercial DM + procedures (LEFT JOIN — most DM patients have no procedures) */
+proc sql;
+    create table _dm_comm_proc as
+    select a.*,
+           coalesce(p.has_debridement, 0) as has_debridement,
+           p.first_debride_date,
+           coalesce(p.n_debride_claims, 0) as n_debride_claims,
+           coalesce(p.has_amputation, 0) as has_amputation,
+           p.first_amp_date,
+           coalesce(p.n_amp_claims, 0) as n_amp_claims
+    from dm_cohort_commercial a
+    left join mylib._comm_proc_agg p
+        on a.submitter = p.submitter
+       and a.group_policy = p.group_policy
+       and a.person_code = p.person_code;
+quit;
+
+proc sql; drop table dm_cohort_commercial; quit;
+proc sql;
+    create table dm_cohort_commercial as select * from _dm_comm_proc;
+quit;
+proc datasets lib=work nolist; delete _dm_comm_proc; quit;
+
+/* P3-2: Commercial DFU + procedures */
+proc sql;
+    create table _dfu_comm_proc as
+    select a.*,
+           coalesce(p.has_debridement, 0) as has_debridement,
+           p.first_debride_date,
+           coalesce(p.n_debride_claims, 0) as n_debride_claims,
+           coalesce(p.has_amputation, 0) as has_amputation,
+           p.first_amp_date,
+           coalesce(p.n_amp_claims, 0) as n_amp_claims
+    from dfu_cohort_commercial a
+    left join mylib._comm_proc_agg p
+        on a.submitter = p.submitter
+       and a.group_policy = p.group_policy
+       and a.person_code = p.person_code;
+quit;
+
+proc sql; drop table dfu_cohort_commercial; quit;
+proc sql;
+    create table dfu_cohort_commercial as select * from _dfu_comm_proc;
+quit;
+proc datasets lib=work nolist; delete _dfu_comm_proc; quit;
+proc datasets lib=mylib nolist; delete _comm_proc_agg; quit;
+
+/* P3-3: Medicare DM + procedures */
+proc sql;
+    create table _dm_mcr_proc as
+    select a.*,
+           coalesce(p.has_debridement, 0) as has_debridement,
+           p.first_debride_date,
+           coalesce(p.n_debride_claims, 0) as n_debride_claims,
+           coalesce(p.has_amputation, 0) as has_amputation,
+           p.first_amp_date,
+           coalesce(p.n_amp_claims, 0) as n_amp_claims
+    from dm_cohort_medicare a
+    left join mylib._mcr_proc_agg p
+        on a.bene_id = p.bene_id;
+quit;
+
+proc sql; drop table dm_cohort_medicare; quit;
+proc sql;
+    create table dm_cohort_medicare as select * from _dm_mcr_proc;
+quit;
+proc datasets lib=work nolist; delete _dm_mcr_proc; quit;
+
+/* P3-4: Medicare DFU + procedures */
+proc sql;
+    create table _dfu_mcr_proc as
+    select a.*,
+           coalesce(p.has_debridement, 0) as has_debridement,
+           p.first_debride_date,
+           coalesce(p.n_debride_claims, 0) as n_debride_claims,
+           coalesce(p.has_amputation, 0) as has_amputation,
+           p.first_amp_date,
+           coalesce(p.n_amp_claims, 0) as n_amp_claims
+    from dfu_cohort_medicare a
+    left join mylib._mcr_proc_agg p
+        on a.bene_id = p.bene_id;
+quit;
+
+proc sql; drop table dfu_cohort_medicare; quit;
+proc sql;
+    create table dfu_cohort_medicare as select * from _dfu_mcr_proc;
+quit;
+proc datasets lib=work nolist; delete _dfu_mcr_proc; quit;
+proc datasets lib=mylib nolist; delete _mcr_proc_agg; quit;
+
+%put NOTE: P3 Procedure join to DM + DFU cohorts complete.;
 
 /* ======================================================================= */
 /* PART G: Summary Reports                                                  */
@@ -687,7 +936,20 @@ proc sql;
     select 'MEDICARE DFU',   count(*) from dfu_cohort_medicare;
 quit;
 
-title "Step 3G-5: Procedure Code Summary - DFU Patients";
+title "Step 3G-5: Procedure Code Summary - DM Patients (all diabetics)";
+proc sql;
+    select 'COMMERCIAL' as source,
+           count(*) as n_dm format=comma12.,
+           sum(has_debridement) as with_debridement format=comma12.,
+           sum(has_amputation) as with_amputation format=comma12.
+    from dm_cohort_commercial
+    union all
+    select 'MEDICARE',
+           count(*), sum(has_debridement), sum(has_amputation)
+    from dm_cohort_medicare;
+quit;
+
+title "Step 3G-6: Procedure Code Summary - DFU Patients";
 proc sql;
     select data_source,
            count(*) as n_dfu format=comma12.,
@@ -719,22 +981,30 @@ title;
     appended to D:\WPWatson (not WORK), and the temp table is deleted
     immediately. At most one temp table exists in WORK at any time.
 
- 3. PASSTHROUGH BENEFITS: WHERE filtering runs on the database server. The
-    database scans the table once, applies the WHERE, computes aggregates,
-    and returns the small result set. SAS never sees the raw claims.
+ 3. PROCEDURE LOGIC — "REQUIRE DM, THEN LOOK FOR PROCEDURES":
+    Parts P1/P2 scan all claims filtered by procedure code WHERE clause
+    (very selective — returns only patients with debridement/amputation).
+    Part P3 INNER JOINs (via LEFT JOIN + discard non-matches) these
+    results to the DM and DFU cohorts from Parts A-E. Non-diabetic
+    patients with procedures are discarded. Both DM cohorts (for
+    amputation censoring) and DFU cohorts (for Tier 2 debridement
+    confirmation) receive procedure fields.
 
- 4. SEVERITY COMPUTATION: L97 severity is computed per-row in the database
-    SQL (CASE on 6th character of each L97 code found). MAX() in GROUP BY
-    takes the worst severity across all claims for each patient.
+ 4. COMMERCIAL FIELD MAPPING: mc055 is the CPT/HCPCS field (NOT mc024,
+    which contains NPI provider numbers). mc058 is the ICD-10-PCS field.
+    Confirmed against 1% sample data.
 
- 5. DFU RESTRICTION: The DFU cohort is restricted to patients in the DM
-    cohort via INNER JOIN during final aggregation. L97 claims from
-    non-diabetic patients are excluded.
+ 5. MEDICARE HCPCS SOURCES: Debridement and amputation CPT codes exist on
+    two tables: APCD_MCR_PRTB_CAR_LIN (carrier line items, field hcpcs_cd,
+    date: line_1st_expns_dt) and APCD_MCR_OUT_REV (outpatient revenue
+    centers, field hcpcs_cd, date: rev_cntr_dt). ICD-10-PCS amputation
+    (0Y6x) is on INP_CLM and SNF_CLM (icd_prcdr_cd1..25).
 
- 6. COLUMN CONTRACT: The 4 output datasets match the exact column names
-    expected by step5_zip_extract.sas. Step5 must reference the new
-    procedure fields: has_debridement, first_debride_date, n_debride_claims,
-    has_amputation, first_amp_date, n_amp_claims.
+ 6. TEMPORAL MATCHING: SAS extracts the first procedure date and total
+    counts per patient. The R pipeline applies the temporal window
+    (debridement within +/-30 days of a DFU claim) for Tier 2 case
+    definition assignment. Amputation censoring (stop counting DFU after
+    first amputation) also uses the first_amp_date from the DM cohort.
 
  7. POSTGRESQL FUNCTIONS: This code uses length() and extract(year from ...).
     If the database is SQL Server, replace:
@@ -743,21 +1013,4 @@ title;
 
  8. AMBIGUOUS DM TYPE: Patients with both E10.x and E11.x across their
     full claim history are flagged as AMBIGUOUS per study protocol.
-
- 9. PROCEDURE CODE EXTRACTION:
-    - Commercial: mc024 (CPT/HCPCS) on each claim row. Debridement and
-      amputation CPTs are captured in the same passthrough as DX codes.
-    - Medicare ICD-10-PCS: icd_prcdr_cd1..25 on INP and SNF claim tables.
-      Captures 0Y6x (lower extremity detachment/amputation).
-    - Medicare HCPCS: hcpcs_cd from carrier line table (APCD_MCR_PRTB_CAR_LIN).
-      Separate passthrough query. If this table or field names don't match,
-      the safety macro creates an empty placeholder.
-
-10. PROCEDURE SCOPE: Procedure codes are extracted from claims that ALSO
-    have DM or DFU diagnosis codes (same WHERE clause). Debridement and
-    amputation claims nearly always carry a diabetes or ulcer DX code,
-    so this restriction is not expected to miss meaningful procedures.
-    The carrier line HCPCS query (Part D2) is unrestricted by DX and
-    captures all debridement/amputation across all patients; restriction
-    to the DM cohort happens in Part E via INNER JOIN.
 *****************************************************************************/
