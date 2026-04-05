@@ -23,6 +23,7 @@
    Part P1: Commercial procedure extraction (standalone, procedure-code-filtered)
    Part P2: Medicare procedure extraction (standalone, procedure-code-filtered)
    Part P3: Join procedures to DM + DFU cohorts (restricts to DM patients)
+   Part T:  Tier 2 claim-level temporal matching (L97 + debridement ±30d)
    Part G:  Summary reports + cleanup
 
  ICD-10-CM Codes:
@@ -46,16 +47,19 @@
    dm_cohort_commercial:  submitter, group_policy, person_code, dm_type,
                           first_dm_year, last_dm_year, n_dm_claims, first_dm_date,
                           has_debridement, first_debride_date, n_debride_claims,
-                          has_amputation, first_amp_date, n_amp_claims
+                          has_amputation, first_amp_date, n_amp_claims,
+                          tier2_temporal
    dm_cohort_medicare:    bene_id, dm_type, first_dm_year, last_dm_year,
                           n_dm_claims, first_dm_date,
                           has_debridement, first_debride_date, n_debride_claims,
-                          has_amputation, first_amp_date, n_amp_claims
+                          has_amputation, first_amp_date, n_amp_claims,
+                          tier2_temporal
    dfu_cohort_commercial: submitter, group_policy, person_code, first_dfu_year,
                           first_dfu_date, last_dfu_year, n_dfu_claims,
                           ever_l97, ever_dm_combo, max_severity_rank,
                           has_debridement, first_debride_date, n_debride_claims,
-                          has_amputation, first_amp_date, n_amp_claims
+                          has_amputation, first_amp_date, n_amp_claims,
+                          tier2_temporal
    dfu_cohort_medicare:   bene_id, (same procedure fields as commercial)
 
  NOTE: Passthrough SQL uses PostgreSQL syntax (length(), extract()).
@@ -881,6 +885,307 @@ proc datasets lib=mylib nolist; delete _mcr_proc_agg; quit;
 %put NOTE: P3 Procedure join to DM + DFU cohorts complete.;
 
 /* ======================================================================= */
+/* PART T: Tier 2 Temporal Matching (claim-level L97 + debridement ±30d)    */
+/*                                                                          */
+/*   Extracts distinct (patient, claim_date) pairs for L97 diagnoses and    */
+/*   for debridement procedures, then performs a claim-level temporal       */
+/*   match in SAS SQL: a patient qualifies for Tier 2 temporal if any       */
+/*   debridement occurs within [L97_date, L97_date + 30 days]. Forward-     */
+/*   only window per Barshes et al. This addresses the limitation that     */
+/*   P1/P2 return only first_debride_date per patient.                     */
+/*                                                                          */
+/*   Cross-year matches are handled automatically because L97 and           */
+/*   debridement date tables are appended across all years before the       */
+/*   SAS-side join.                                                         */
+/*                                                                          */
+/*   Output:                                                                */
+/*     tier2_temporal flag added to dm_cohort_* and dfu_cohort_*            */
+/* ======================================================================= */
+
+/* ----------------------------------------------------------------------- */
+/* T1: Commercial L97 claim dates (one row per patient per unique date)    */
+/* ----------------------------------------------------------------------- */
+%macro get_comm_l97_dates(yr, first=0);
+    proc sql;
+        connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+        create table _comm_l97_dt as
+        select * from connection to odbc (
+            select distinct mc001 as submitter,
+                            mc006 as group_policy,
+                            mc009 as person_code,
+                            mc017 as claim_date
+            from public.CLAIM_SVC_DT_&yr.
+            where (%comm_like(L97))
+        );
+        disconnect from odbc;
+    quit;
+
+    %if &first = 1 %then %do;
+        data mylib.comm_l97_dates; set _comm_l97_dt; run;
+    %end;
+    %else %do;
+        proc append base=mylib.comm_l97_dates data=_comm_l97_dt force; run;
+    %end;
+    proc datasets lib=work nolist; delete _comm_l97_dt; quit;
+    %put NOTE: T1 Commercial L97 dates &yr. complete.;
+%mend;
+
+%get_comm_l97_dates(2017, first=1);
+%get_comm_l97_dates(2018);
+%get_comm_l97_dates(2019);
+%get_comm_l97_dates(2020);
+%get_comm_l97_dates(2021);
+%get_comm_l97_dates(2022);
+%get_comm_l97_dates(2023);
+%get_comm_l97_dates(2024);
+
+/* ----------------------------------------------------------------------- */
+/* T2: Commercial debridement claim dates (one row per patient per date)   */
+/* ----------------------------------------------------------------------- */
+%macro get_comm_dbr_dates(yr, first=0);
+    proc sql;
+        connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+        create table _comm_dbr_dt as
+        select * from connection to odbc (
+            select distinct mc001 as submitter,
+                            mc006 as group_policy,
+                            mc009 as person_code,
+                            mc017 as claim_date
+            from public.CLAIM_SVC_DT_&yr.
+            where upper(mc055) in (
+                &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+                &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+            )
+        );
+        disconnect from odbc;
+    quit;
+
+    %if &first = 1 %then %do;
+        data mylib.comm_dbr_dates; set _comm_dbr_dt; run;
+    %end;
+    %else %do;
+        proc append base=mylib.comm_dbr_dates data=_comm_dbr_dt force; run;
+    %end;
+    proc datasets lib=work nolist; delete _comm_dbr_dt; quit;
+    %put NOTE: T2 Commercial debridement dates &yr. complete.;
+%mend;
+
+%get_comm_dbr_dates(2017, first=1);
+%get_comm_dbr_dates(2018);
+%get_comm_dbr_dates(2019);
+%get_comm_dbr_dates(2020);
+%get_comm_dbr_dates(2021);
+%get_comm_dbr_dates(2022);
+%get_comm_dbr_dates(2023);
+%get_comm_dbr_dates(2024);
+
+/* ----------------------------------------------------------------------- */
+/* T3: Commercial temporal match (SAS SQL — handles cross-year)            */
+/*     tier2_temporal = 1 if any debridement within [L97, L97+30d]         */
+/* ----------------------------------------------------------------------- */
+proc sql;
+    create table mylib._tier2_temporal_comm as
+    select distinct L.submitter, L.group_policy, L.person_code,
+           1 as tier2_temporal
+    from mylib.comm_l97_dates L
+    inner join mylib.comm_dbr_dates D
+        on L.submitter = D.submitter
+       and L.group_policy = D.group_policy
+       and L.person_code = D.person_code
+    where D.claim_date - L.claim_date between 0 and 30;
+quit;
+
+proc datasets lib=mylib nolist;
+    delete comm_l97_dates comm_dbr_dates;
+quit;
+
+%put NOTE: T3 Commercial Tier 2 temporal match complete.;
+
+title "Step 3T3: Commercial Tier 2 Temporal Match";
+proc sql;
+    select 'Patients with L97 + debridement within 30d' as metric,
+           count(*) as n format=comma12.
+    from mylib._tier2_temporal_comm;
+quit;
+
+/* ----------------------------------------------------------------------- */
+/* T4: Medicare L97 claim dates from 7 claim tables                        */
+/* ----------------------------------------------------------------------- */
+%macro get_mcr_l97_dates(name, tbl, max_dx, has_admtg, first=0);
+    proc sql;
+        connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+        create table _mcr_l97_dt as
+        select * from connection to odbc (
+            select distinct bene_id,
+                            clm_from_dt as claim_date
+            from public.APCD_MCR_&tbl._CLM
+            where (%mcr_like(L97, &max_dx., &has_admtg.))
+              and clm_from_dt < &q.2025-01-01&q.
+        );
+        disconnect from odbc;
+    quit;
+
+    %if &first = 1 %then %do;
+        data mylib.mcr_l97_dates; set _mcr_l97_dt; run;
+    %end;
+    %else %do;
+        proc append base=mylib.mcr_l97_dates data=_mcr_l97_dt force; run;
+    %end;
+    proc datasets lib=work nolist; delete _mcr_l97_dt; quit;
+    %put NOTE: T4 Medicare L97 dates &name. complete.;
+%mend;
+
+%get_mcr_l97_dates(prtb, PRTB_CAR, 12, 0, first=1);
+%get_mcr_l97_dates(out,  OUT,      25, 0);
+%get_mcr_l97_dates(inp,  INP,      25, 1);
+%get_mcr_l97_dates(snf,  SNF,      25, 1);
+%get_mcr_l97_dates(hha,  HHA,      25, 0);
+%get_mcr_l97_dates(hsp,  HSP,      25, 0);
+%get_mcr_l97_dates(dme,  DME,      12, 0);
+
+/* ----------------------------------------------------------------------- */
+/* T5: Medicare debridement claim dates from 2 HCPCS tables                */
+/* ----------------------------------------------------------------------- */
+/* T5-1: Carrier line (line_1st_expns_dt) */
+proc sql;
+    connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+    create table mylib._mcr_dbr_car as
+    select * from connection to odbc (
+        select distinct bene_id,
+                        line_1st_expns_dt as claim_date
+        from public.APCD_MCR_PRTB_CAR_LIN
+        where upper(hcpcs_cd) in (
+            &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+            &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+        )
+          and line_1st_expns_dt < &q.2025-01-01&q.
+    );
+    disconnect from odbc;
+quit;
+%put NOTE: T5-1 Medicare debridement dates (carrier) complete.;
+
+/* T5-2: Outpatient revenue (rev_cntr_dt) */
+proc sql;
+    connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+    create table mylib._mcr_dbr_out as
+    select * from connection to odbc (
+        select distinct bene_id,
+                        rev_cntr_dt as claim_date
+        from public.APCD_MCR_OUT_REV
+        where upper(hcpcs_cd) in (
+            &q.97597&q.,&q.97598&q.,&q.11042&q.,&q.11043&q.,
+            &q.11044&q.,&q.11045&q.,&q.11046&q.,&q.11047&q.,&q.97602&q.
+        )
+          and rev_cntr_dt < &q.2025-01-01&q.
+    );
+    disconnect from odbc;
+quit;
+%put NOTE: T5-2 Medicare debridement dates (outpatient rev) complete.;
+
+/* T5-3: Union carrier + outpatient debridement dates */
+proc sql;
+    create table mylib.mcr_dbr_dates as
+    select bene_id, claim_date from mylib._mcr_dbr_car
+    union
+    select bene_id, claim_date from mylib._mcr_dbr_out;
+quit;
+proc datasets lib=mylib nolist;
+    delete _mcr_dbr_car _mcr_dbr_out;
+quit;
+
+/* ----------------------------------------------------------------------- */
+/* T6: Medicare temporal match (SAS SQL)                                   */
+/* ----------------------------------------------------------------------- */
+proc sql;
+    create table mylib._tier2_temporal_mcr as
+    select distinct L.bene_id,
+           1 as tier2_temporal
+    from mylib.mcr_l97_dates L
+    inner join mylib.mcr_dbr_dates D
+        on L.bene_id = D.bene_id
+    where D.claim_date - L.claim_date between 0 and 30;
+quit;
+
+proc datasets lib=mylib nolist;
+    delete mcr_l97_dates mcr_dbr_dates;
+quit;
+
+%put NOTE: T6 Medicare Tier 2 temporal match complete.;
+
+title "Step 3T6: Medicare Tier 2 Temporal Match";
+proc sql;
+    select 'Patients with L97 + debridement within 30d' as metric,
+           count(*) as n format=comma12.
+    from mylib._tier2_temporal_mcr;
+quit;
+
+/* ----------------------------------------------------------------------- */
+/* T7: Join tier2_temporal flag to DM and DFU cohorts                      */
+/* ----------------------------------------------------------------------- */
+
+/* T7-1: Commercial DM cohort */
+proc sql;
+    create table _dm_comm_t2 as
+    select a.*,
+           coalesce(t.tier2_temporal, 0) as tier2_temporal
+    from dm_cohort_commercial a
+    left join mylib._tier2_temporal_comm t
+        on a.submitter = t.submitter
+       and a.group_policy = t.group_policy
+       and a.person_code = t.person_code;
+quit;
+proc sql; drop table dm_cohort_commercial; quit;
+proc sql; create table dm_cohort_commercial as select * from _dm_comm_t2; quit;
+proc datasets lib=work nolist; delete _dm_comm_t2; quit;
+
+/* T7-2: Commercial DFU cohort */
+proc sql;
+    create table _dfu_comm_t2 as
+    select a.*,
+           coalesce(t.tier2_temporal, 0) as tier2_temporal
+    from dfu_cohort_commercial a
+    left join mylib._tier2_temporal_comm t
+        on a.submitter = t.submitter
+       and a.group_policy = t.group_policy
+       and a.person_code = t.person_code;
+quit;
+proc sql; drop table dfu_cohort_commercial; quit;
+proc sql; create table dfu_cohort_commercial as select * from _dfu_comm_t2; quit;
+proc datasets lib=work nolist; delete _dfu_comm_t2; quit;
+
+proc datasets lib=mylib nolist; delete _tier2_temporal_comm; quit;
+
+/* T7-3: Medicare DM cohort */
+proc sql;
+    create table _dm_mcr_t2 as
+    select a.*,
+           coalesce(t.tier2_temporal, 0) as tier2_temporal
+    from dm_cohort_medicare a
+    left join mylib._tier2_temporal_mcr t
+        on a.bene_id = t.bene_id;
+quit;
+proc sql; drop table dm_cohort_medicare; quit;
+proc sql; create table dm_cohort_medicare as select * from _dm_mcr_t2; quit;
+proc datasets lib=work nolist; delete _dm_mcr_t2; quit;
+
+/* T7-4: Medicare DFU cohort */
+proc sql;
+    create table _dfu_mcr_t2 as
+    select a.*,
+           coalesce(t.tier2_temporal, 0) as tier2_temporal
+    from dfu_cohort_medicare a
+    left join mylib._tier2_temporal_mcr t
+        on a.bene_id = t.bene_id;
+quit;
+proc sql; drop table dfu_cohort_medicare; quit;
+proc sql; create table dfu_cohort_medicare as select * from _dfu_mcr_t2; quit;
+proc datasets lib=work nolist; delete _dfu_mcr_t2; quit;
+
+proc datasets lib=mylib nolist; delete _tier2_temporal_mcr; quit;
+
+%put NOTE: T7 tier2_temporal join to DM + DFU cohorts complete.;
+
+/* ======================================================================= */
 /* PART G: Summary Reports                                                  */
 /* ======================================================================= */
 
@@ -957,12 +1262,38 @@ proc sql;
            sum(has_amputation) as with_amputation format=comma12.,
            sum(case when has_debridement = 1 or ever_dm_combo = 1
                     then 1 else 0 end) as tier2_eligible format=comma12.,
+           sum(tier2_temporal) as tier2_temporal_match format=comma12.,
            sum(ever_dm_combo) as combo_only format=comma12.
     from (
-        select data_source, has_debridement, has_amputation, ever_dm_combo
+        select data_source, has_debridement, has_amputation,
+               ever_dm_combo, tier2_temporal
             from dfu_cohort_commercial
         union all
-        select data_source, has_debridement, has_amputation, ever_dm_combo
+        select data_source, has_debridement, has_amputation,
+               ever_dm_combo, tier2_temporal
+            from dfu_cohort_medicare
+    )
+    group by data_source;
+quit;
+
+title "Step 3G-7: Tier 2 Temporal Match vs Any-Debridement Approximation";
+proc sql;
+    select data_source,
+           sum(case when tier2_temporal = 1 then 1 else 0 end)
+               as temporal_match format=comma12.,
+           sum(case when has_debridement = 1 and ever_l97 = 1
+                    and tier2_temporal = 0 then 1 else 0 end)
+               as dbr_no_temporal_match format=comma12.,
+           sum(case when ever_dm_combo = 1 and tier2_temporal = 0
+                    then 1 else 0 end)
+               as combo_only_no_temporal format=comma12.
+    from (
+        select data_source, ever_l97, ever_dm_combo,
+               has_debridement, tier2_temporal
+            from dfu_cohort_commercial
+        union all
+        select data_source, ever_l97, ever_dm_combo,
+               has_debridement, tier2_temporal
             from dfu_cohort_medicare
     )
     group by data_source;
@@ -1000,11 +1331,19 @@ title;
     centers, field hcpcs_cd, date: rev_cntr_dt). ICD-10-PCS amputation
     (0Y6x) is on INP_CLM and SNF_CLM (icd_prcdr_cd1..25).
 
- 6. TEMPORAL MATCHING: SAS extracts the first procedure date and total
-    counts per patient. The R pipeline applies the temporal window
-    (debridement within +/-30 days of a DFU claim) for Tier 2 case
-    definition assignment. Amputation censoring (stop counting DFU after
-    first amputation) also uses the first_amp_date from the DM cohort.
+ 6. TEMPORAL MATCHING (Part T): For each DM patient, Part T extracts
+    distinct (patient, date) pairs for L97 diagnosis claims and for
+    debridement procedure claims, then performs a claim-level temporal
+    match in SAS SQL. A patient is flagged tier2_temporal = 1 if any
+    debridement falls within [L97_date, L97_date + 30 days] — the
+    forward-only window used by Barshes et al. This addresses the
+    limitation that P1/P2 return only first_debride_date per patient.
+    Cross-year matches are handled automatically because date tables
+    are appended across all years before the SAS-side join.
+
+ 7. AMPUTATION CENSORING: The R pipeline applies amputation censoring
+    (stop counting DFU after first amputation) using first_amp_date
+    from the DM cohort.
 
  7. POSTGRESQL FUNCTIONS: This code uses length() and extract(year from ...).
     If the database is SQL Server, replace:

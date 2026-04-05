@@ -154,6 +154,7 @@ proc sql;
            d.has_amputation,
            d.first_amp_date,
            d.n_amp_claims,
+           d.tier2_temporal,
            /* MEST linkage: MEMBER.me107 -> MEST -> study_id */
            case when t.apcd_unique_id is not null and t.apcd_unique_id ne ''
                 then catx('', t.apcd_unique_id, t.gender)
@@ -217,6 +218,7 @@ proc sql;
            d.has_amputation,
            d.first_amp_date,
            d.n_amp_claims,
+           d.tier2_temporal,
            /* Study ID from BEN_SUM.apcd_unique_id + harmonized gender */
            case when b.apcd_unique_id is not null and b.apcd_unique_id ne ''
                 then catx('', b.apcd_unique_id,
@@ -355,6 +357,7 @@ proc sql;
            has_amputation,
            first_amp_date,
            n_amp_claims,
+           tier2_temporal,
            substr(strip(zip_final), 1, 5) as ar_zip length=5,
            zip_source length=10,
            state_member as state length=5,
@@ -401,6 +404,7 @@ proc sql;
            has_amputation,
            first_amp_date,
            n_amp_claims,
+           tier2_temporal,
            substr(strip(zip_final), 1, 5) as ar_zip length=5,
            zip_source,
            state_member as state,
@@ -449,7 +453,7 @@ proc export data=dm_dfu_analytic(
     keep=patient_id study_id first_dfu_date dfu_source severity_rank
          has_debridement first_debride_date n_debride_claims
          has_amputation first_amp_date n_amp_claims
-         days_dm_to_dfu
+         tier2_temporal days_dm_to_dfu
 )   outfile="&outdir.\dfu_commercial.csv"
     dbms=csv replace;
 run;
@@ -460,7 +464,7 @@ proc export data=dm_dfu_analytic(
     keep=patient_id study_id first_dfu_date dfu_source severity_rank
          has_debridement first_debride_date n_debride_claims
          has_amputation first_amp_date n_amp_claims
-         days_dm_to_dfu
+         tier2_temporal days_dm_to_dfu
 )   outfile="&outdir.\dfu_medicare.csv"
     dbms=csv replace;
 run;
