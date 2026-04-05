@@ -25,7 +25,10 @@ suppressPackageStartupMessages({
     library(fs)
 })
 
-DROPBOX_DIR  <- "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+DROPBOX_DIR  <- Sys.getenv(
+    "DFU_DROPBOX_DIR",
+    "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+)
 OUT_DIR      <- file.path(DROPBOX_DIR, "analytic")
 CLEAN_RDS    <- file.path(OUT_DIR, "01_clean.rds")
 TIERED_RDS   <- file.path(OUT_DIR, "02_tiered.rds")
@@ -131,9 +134,9 @@ cat("\n=== Distribution of days from first DFU to first debridement ===\n")
 print(
     dat[dm_primary == TRUE & ever_l97 == 1 & has_debridement == 1,
         .(n        = .N,
-          p05      = quantile(days_dfu_to_debride, 0.05, na.rm = TRUE),
-          median   = median(days_dfu_to_debride, na.rm = TRUE),
-          p95      = quantile(days_dfu_to_debride, 0.95, na.rm = TRUE),
+          p05      = as.numeric(quantile(days_dfu_to_debride, 0.05, na.rm = TRUE)),
+          median   = as.numeric(median(days_dfu_to_debride, na.rm = TRUE)),
+          p95      = as.numeric(quantile(days_dfu_to_debride, 0.95, na.rm = TRUE)),
           n_before = sum(days_dfu_to_debride < 0, na.rm = TRUE),
           n_after  = sum(days_dfu_to_debride >= 0, na.rm = TRUE),
           n_na     = sum(is.na(days_dfu_to_debride))),

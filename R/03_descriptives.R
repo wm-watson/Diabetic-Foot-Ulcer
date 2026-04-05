@@ -23,7 +23,10 @@ suppressPackageStartupMessages({
 })
 
 # ---- Paths ------------------------------------------------------------------
-DROPBOX_DIR <- "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+DROPBOX_DIR <- Sys.getenv(
+    "DFU_DROPBOX_DIR",
+    "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+)
 ANALYTIC    <- file.path(DROPBOX_DIR, "analytic")
 OUT_DIR     <- file.path(DROPBOX_DIR, "outputs", "descriptives")
 dir_create(OUT_DIR)
@@ -233,12 +236,14 @@ yearly_payer <- rbindlist(lapply(years, function(Y) {
     d[, censored := !is.na(first_amp_year) &
                     first_amp_year <= Y &
                     (is.na(first_dfu_year) | first_amp_year >= first_dfu_year)]
-    d[first_dm_year <= Y & last_dm_year >= Y & !censored,
-      .(dm_denom = .N,
-        dfu_num  = sum(tier2 == 1L &
-                       !is.na(first_dfu_year) &
-                       first_dfu_year <= Y & last_dfu_year >= Y)),
-      by = .(year = Y, data_source)]
+    active <- d[first_dm_year <= Y & last_dm_year >= Y & !censored]
+    out <- active[, .(dm_denom = .N,
+                      dfu_num  = sum(tier2 == 1L &
+                                     !is.na(first_dfu_year) &
+                                     first_dfu_year <= Y & last_dfu_year >= Y)),
+                  by = data_source]
+    out[, year := Y]
+    out[]
 }))
 yearly_payer[, rate_per_1000 := 1000 * dfu_num / pmax(dm_denom, 1L)]
 

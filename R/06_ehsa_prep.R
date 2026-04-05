@@ -41,7 +41,10 @@ options(tigris_use_cache = TRUE)
 sf_use_s2(FALSE)
 
 # ---- Paths ------------------------------------------------------------------
-DROPBOX_DIR <- "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+DROPBOX_DIR <- Sys.getenv(
+    "DFU_DROPBOX_DIR",
+    "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+)
 PANELS      <- file.path(DROPBOX_DIR, "outputs", "panels")
 OUT_DIR     <- file.path(DROPBOX_DIR, "outputs", "ehsa_input")
 dir_create(OUT_DIR)
@@ -69,9 +72,12 @@ ehsa_seas <- make_ehsa(panel_seasonal,
                        file.path(OUT_DIR, "ehsa_input_seasonal.csv"))
 
 # ---- Export ZCTA shapefile (matching ZCTAs present in panel) ----------------
+# tigris::zctas(state=) only works for 2000/2010 vintages. For 2020, pull the
+# national ZCTA file and subset to Arkansas ZCTAs (those starting with 71/72).
 zcta_set <- union(unique(panel_half$zcta), unique(panel_seasonal$zcta))
-ar <- zctas(year = 2020, state = "AR", progress_bar = FALSE)
+ar <- zctas(year = 2020, progress_bar = FALSE)
 ar$zcta <- ar$ZCTA5CE20
+ar <- ar[substr(ar$zcta, 1, 2) %in% c("71", "72"), ]
 ar <- ar[ar$zcta %in% zcta_set, ]
 ar <- st_transform(ar, 5070)
 

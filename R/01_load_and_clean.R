@@ -16,7 +16,11 @@ suppressPackageStartupMessages({
 })
 
 # ---- Paths ------------------------------------------------------------------
-DROPBOX_DIR  <- "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+# DFU_DROPBOX_DIR env var overrides the default for CI/test runs.
+DROPBOX_DIR  <- Sys.getenv(
+    "DFU_DROPBOX_DIR",
+    "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+)
 CSV_IN       <- file.path(DROPBOX_DIR, "dm_dfu_analytic.csv")
 OUT_DIR      <- file.path(DROPBOX_DIR, "analytic")
 dir_create(OUT_DIR)

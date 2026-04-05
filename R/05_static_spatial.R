@@ -27,7 +27,10 @@ options(tigris_use_cache = TRUE)
 sf_use_s2(FALSE)
 
 # ---- Paths ------------------------------------------------------------------
-DROPBOX_DIR <- "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+DROPBOX_DIR <- Sys.getenv(
+    "DFU_DROPBOX_DIR",
+    "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+)
 PANELS      <- file.path(DROPBOX_DIR, "outputs", "panels")
 OUT_DIR     <- file.path(DROPBOX_DIR, "outputs", "static_spatial")
 dir_create(OUT_DIR)
@@ -56,9 +59,12 @@ pooled[, suppressed := dfu_person_halfyears < 11 | dm_person_halfyears < 20]
 pooled_active <- pooled[!(suppressed)]
 
 # ---- ZCTA geometry ----------------------------------------------------------
-ar_zctas <- zctas(year = 2020, state = "AR", progress_bar = FALSE)
-ar_zctas <- st_transform(ar_zctas, 5070)   # EPSG:5070 NAD83 Conus Albers
+# tigris::zctas(state=) is only valid for 2000/2010 vintages; for 2020 we
+# pull the national ZCTA file and subset to Arkansas ZCTAs (prefix 71/72).
+ar_zctas <- zctas(year = 2020, progress_bar = FALSE)
 ar_zctas$zcta <- ar_zctas$ZCTA5CE20
+ar_zctas <- ar_zctas[substr(ar_zctas$zcta, 1, 2) %in% c("71", "72"), ]
+ar_zctas <- st_transform(ar_zctas, 5070)   # EPSG:5070 NAD83 Conus Albers
 
 zcta_sf <- merge(ar_zctas, pooled_active, by = "zcta", all.x = FALSE)
 

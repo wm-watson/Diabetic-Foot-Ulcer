@@ -35,7 +35,10 @@ suppressPackageStartupMessages({
 })
 
 # ---- Paths ------------------------------------------------------------------
-DROPBOX_DIR <- "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+DROPBOX_DIR <- Sys.getenv(
+    "DFU_DROPBOX_DIR",
+    "/Users/williamwatson/Library/CloudStorage/Dropbox/Dissertation/Aim 3 - DFU"
+)
 ANALYTIC    <- file.path(DROPBOX_DIR, "analytic")
 BIN_COMM    <- file.path(DROPBOX_DIR, "bin_activity_commercial.csv")
 BIN_MCR     <- file.path(DROPBOX_DIR, "bin_activity_medicare.csv")
@@ -60,31 +63,27 @@ pt_keys <- pt[, .(data_source, patient_id, study_id, zcta,
                   first_dm_year, last_dm_year)]
 
 # ---- Load bin-activity claim-level flags ------------------------------------
-ba_comm <- fread(BIN_COMM)
-ba_mcr  <- fread(BIN_MCR)
+ba_comm <- fread(BIN_COMM, colClasses = list(character = c("submitter",
+                                                           "group_policy",
+                                                           "person_code")))
+ba_mcr  <- fread(BIN_MCR, colClasses = list(character = "bene_id"))
 ba_comm[, data_source := "COMMERCIAL"]
 ba_mcr[,  data_source := "MEDICARE"]
 
-# Harmonize key column to patient_id. step3b exports commercial rows by
-# (submitter, group_policy, person_code) and Medicare rows by bene_id.
-# The same composite is used upstream in step5 to build patient_id.
-if ("patient_id" %in% names(ba_comm)) {
-    ba_comm_keyed <- ba_comm
-} else {
-    ba_comm[, patient_id := paste(submitter, group_policy, person_code, sep = "|")]
-    ba_comm_keyed <- ba_comm
-}
-if ("patient_id" %in% names(ba_mcr)) {
-    ba_mcr_keyed <- ba_mcr
-} else {
-    ba_mcr[, patient_id := as.character(bene_id)]
-    ba_mcr_keyed <- ba_mcr
-}
+# Reconstruct the same patient_id key that step5 builds:
+#   commercial: submitter|group_policy|person_code
+#   medicare:   bene_id
+ba_comm[, patient_id := paste(submitter, group_policy, person_code, sep = "|")]
+ba_mcr[,  patient_id := as.character(bene_id)]
+ba_comm_keyed <- ba_comm
+ba_mcr_keyed  <- ba_mcr
 
+# step3b emits: had_dm, had_l97, had_combo, had_dfu (== l97 or combo).
+# Debridement/amputation flags come from the patient-level analytic file
+# (has_debridement / first_amp_date), NOT from bin activity.
 keep_cols <- c("data_source", "patient_id", "bin_year", "half",
                "season", "season_year",
-               "had_dm", "had_l97", "had_debridement",
-               "had_amputation", "had_combo")
+               "had_dm", "had_l97", "had_combo", "had_dfu")
 ba <- rbindlist(list(ba_comm_keyed[, ..keep_cols],
                      ba_mcr_keyed[,  ..keep_cols]),
                 use.names = TRUE)
