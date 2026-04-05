@@ -115,9 +115,27 @@ Last updated: 2026-04-05 (rev 2: Option C window + tier2_temporal + bin structur
 - **Impact:** "Time from DM to DFU" is biased downward for left-censored patients. The negative values observed (min –2,587 days Medicare) reflect DFU identified before DM in our window — consistent with L97 being recorded before a DM code on a later claim.
 - **Analytic decision:** For the descriptive paper, we do not analyze time-to-DFU. EHSA uses year-level panel data which is robust to left censoring on individual duration.
 
-### 5.5 Medicare 2022 truncation
+### 5.5 Medicare 2022 truncation — Option C (decided 2026-04-05)
 - Medicare data ends 2022. Commercial data runs through 2024.
-- For EHSA, we will either (a) restrict both to 2017–2022 for direct comparability, or (b) run EHSA on commercial 2017–2024 separately with a Medicare 2014–2022 supplementary map. **Decision pending — see script 06.**
+- **Primary analysis (Option C):** 2017–2022 combined commercial + Medicare
+  with 12 half-year bins (H1/H2) as the primary EHSA time resolution.
+- **Sensitivity:** payer-stratified EHSA (commercial 2017–2022, Medicare
+  2014–2022) to verify hot-spot stability is not driven by payer mix.
+- **Second sensitivity:** 24 meteorological-seasonal bins (W/S/U/A) over
+  2017–2022 to address Barshes-style seasonality of ulcer presentation.
+- **Rationale:** Option C keeps both payers in the primary map for
+  population-level generalizability in Arkansas, and the ≥10-time-slice
+  ArcGIS EHSA requirement is met with 12 H1/H2 bins.
+
+### 5.6 Bin structure (step3b_bin_activity.sas)
+- `bin_activity_commercial.csv` and `bin_activity_medicare.csv` provide
+  one row per (patient × year × half × season × season_year) with flags
+  had_dm, had_l97, had_debridement, had_amputation, had_combo.
+- R aggregates to the primary 12-bin H1/H2 panel by `group_by(year, half)`
+  and to the 24-bin seasonal panel by `group_by(season_year, season)`.
+  December is assigned to the next-year winter bin (meteorological convention).
+- Claim-level temporal matching for Tier 2 remains in SAS Part T; bin
+  activity here is used only for time-slice membership, not case definition.
 
 ---
 
@@ -132,10 +150,19 @@ Last updated: 2026-04-05 (rev 2: Option C window + tier2_temporal + bin structur
 ### 6.3 Rate
 - **Cases per 1,000 diabetics** (directly age-adjusted only if N permits at ZCTA level — likely not; report crude with age distribution as covariate for Paper 2).
 
-### 6.4 Small-cell suppression
-- ZCTAs with DM denominator <11 in any year suppressed from maps (PCD/CDC standard).
-- Suppression applied at ZCTA-year level for EHSA input; ZCTAs suppressed in any year flagged.
-- Raw counts retained in analytic dataset for internal use; paper reports only suppressed values.
+### 6.4 Small-cell suppression (PCD standard)
+- **Numerator threshold:** DFU cases <11 per ZCTA-bin suppressed.
+- **Denominator threshold:** DM denominator <20 per ZCTA-bin suppressed.
+- **Rule:** A ZCTA-bin cell is suppressed if EITHER condition holds.
+- **Scope:** Applied to all descriptive rate tables and to the EHSA input
+  CSV before space-time cube construction. ArcGIS handles suppressed cells
+  as missing (not zero) in the cube to avoid false cold spots.
+- **Rationale:** PCD requires suppression of small cells to protect
+  confidentiality and statistical validity of rate estimates. Rates per
+  1,000 partially mask small counts but do not eliminate the concern.
+- **If reviewers request stricter suppression at R&R:** thresholds are
+  parameterized in `R/04_zcta_aggregation.R` and can be tightened without
+  re-running the SAS pipeline.
 
 ---
 
