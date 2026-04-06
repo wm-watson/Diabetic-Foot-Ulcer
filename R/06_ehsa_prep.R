@@ -56,13 +56,17 @@ panel_seasonal <- readRDS(file.path(PANELS, "panel_seasonal.rds"))
 # ---- Build EHSA CSVs --------------------------------------------------------
 make_ehsa <- function(panel, outfile) {
     out <- copy(panel)
-    # Suppressed cells: write NA for rate (cube treats as missing)
-    out[, rate_per_1000 := ifelse(suppressed, NA_real_, rate_per_1000)]
+    # No suppression applied to EHSA input — the space-time cube is an
+    # analytic method, not a published display. Suppression is applied
+    # only to choropleth maps and descriptive count/rate tables.
+    # Zero-denominator cells get rate = 0 (not NA) so the cube has a
+    # complete panel for Mann-Kendall trend detection.
+    out[, rate_per_1000 := fifelse(dm_denom == 0L, 0, rate_per_1000)]
     out[, bin_start := format(bin_start, "%Y-%m-%d")]
     out <- out[, .(zcta, bin_start, rate_per_1000,
-                   dm_denom, dfu_num, suppressed)]
+                   dm_denom, dfu_num)]
     setorder(out, zcta, bin_start)
-    fwrite(out, outfile, na = "")
+    fwrite(out, outfile)
     out
 }
 
@@ -90,9 +94,9 @@ report <- data.table(
     n_rows = c(nrow(ehsa_half), nrow(ehsa_seas)),
     n_zctas = c(uniqueN(ehsa_half$zcta), uniqueN(ehsa_seas$zcta)),
     n_bins  = c(uniqueN(ehsa_half$bin_start), uniqueN(ehsa_seas$bin_start)),
-    n_suppressed = c(sum(ehsa_half$suppressed), sum(ehsa_seas$suppressed)),
-    pct_suppressed = c(round(100 * mean(ehsa_half$suppressed), 1),
-                       round(100 * mean(ehsa_seas$suppressed), 1))
+    n_zero_denom = c(sum(ehsa_half$dm_denom == 0), sum(ehsa_seas$dm_denom == 0)),
+    pct_zero_denom = c(round(100 * mean(ehsa_half$dm_denom == 0), 1),
+                       round(100 * mean(ehsa_seas$dm_denom == 0), 1))
 )
 fwrite(report, file.path(OUT_DIR, "ehsa_input_report.csv"))
 print(report)

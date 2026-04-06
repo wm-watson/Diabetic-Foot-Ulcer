@@ -154,9 +154,12 @@ Last updated: 2026-04-05 (rev 2: Option C window + tier2_temporal + bin structur
 - **Numerator threshold:** DFU cases <11 per ZCTA-bin suppressed.
 - **Denominator threshold:** DM denominator <20 per ZCTA-bin suppressed.
 - **Rule:** A ZCTA-bin cell is suppressed if EITHER condition holds.
-- **Scope:** Applied to all descriptive rate tables and to the EHSA input
-  CSV before space-time cube construction. ArcGIS handles suppressed cells
-  as missing (not zero) in the cube to avoid false cold spots.
+- **Scope:** Applied to choropleth maps and descriptive count/rate tables
+  only. EHSA input is **unsuppressed** — the space-time cube receives the
+  full ZCTA × bin panel (including small cells) so that the Mann-Kendall
+  trend test has a complete time series. Suppression is a display/privacy
+  concern, not an analytic one; EHSA output maps will suppress any ZCTA
+  whose underlying cell would have been flagged.
 - **Rationale:** PCD requires suppression of small cells to protect
   confidentiality and statistical validity of rate estimates. Rates per
   1,000 partially mask small counts but do not eliminate the concern.
