@@ -80,7 +80,7 @@ libname mylib 'D:\WPWatson';
 %mend;
 
 %macro mcr_like(prefix, max_dx, has_admtg);
-    upper(prncpl_dgns_cd) like &q.&prefix.%&q.
+    upper(prncpal_dgns_cd) like &q.&prefix.%&q.
     %do i = 1 %to &max_dx;
         or upper(icd_dgns_cd&i.) like &q.&prefix.%&q.
     %end;
@@ -90,7 +90,7 @@ libname mylib 'D:\WPWatson';
 %mend;
 
 %macro mcr_in_combo(max_dx, has_admtg);
-    upper(prncpl_dgns_cd) in (&q.E10621&q.,&q.E10622&q.,&q.E11621&q.,&q.E11622&q.)
+    upper(prncpal_dgns_cd) in (&q.E10621&q.,&q.E10622&q.,&q.E11621&q.,&q.E11622&q.)
     %do i = 1 %to &max_dx;
         or upper(icd_dgns_cd&i.) in (&q.E10621&q.,&q.E10622&q.,&q.E11621&q.,&q.E11622&q.)
     %end;
