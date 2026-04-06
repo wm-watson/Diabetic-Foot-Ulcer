@@ -71,10 +71,16 @@ ba_comm[, data_source := "COMMERCIAL"]
 ba_mcr[,  data_source := "MEDICARE"]
 
 # Reconstruct the same patient_id key that step5 builds:
-#   commercial: submitter|group_policy|person_code
-#   medicare:   bene_id
-ba_comm[, patient_id := paste(submitter, group_policy, person_code, sep = "|")]
-ba_mcr[,  patient_id := as.character(bene_id)]
+#   commercial: catx('|', submitter, group_policy, person_code) LENGTH=80
+#     IMPORTANT: SAS truncates this to 80 chars. The encrypted group_policy
+#     alone can exceed 80 chars, so the |person_code suffix is often clipped.
+#     We must replicate the exact same truncation here.
+#   medicare: bene_id (no truncation issue)
+ba_comm[, patient_id := substr(paste(submitter, group_policy, person_code,
+                                     sep = "|"), 1, 80)]
+# Medicare: step5 uses `bene_id as patient_id length=80`, so the encrypted
+# bene_id (88 chars) is also truncated. Replicate here.
+ba_mcr[,  patient_id := substr(as.character(bene_id), 1, 80)]
 ba_comm_keyed <- ba_comm
 ba_mcr_keyed  <- ba_mcr
 
