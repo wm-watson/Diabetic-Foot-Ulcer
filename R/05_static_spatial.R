@@ -70,7 +70,19 @@ pooled <- panel[, .(dm_person_halfyears  = sum(dm_denom),
                 by = zcta]
 pooled[, rate_per_1000 := 1000 * dfu_person_halfyears /
                           pmax(dm_person_halfyears, 1L)]
-pooled[, suppressed := dfu_person_halfyears < 11 | dm_person_halfyears < 20]
+# Analytic threshold: keep any ZCTA with >=20 DM person-halfyears so the
+# rate is not pure noise. Do NOT apply the PCD <11 cases display rule
+# here -- that's for published tables/maps. Excluding low-DFU ZCTAs
+# hides the cold-spot signal and inflates Moran's I toward the high end
+# (see 2026-04-21 note). Display-level suppression can be re-enabled
+# for publication by setting SUPPRESS_DISPLAY = TRUE.
+SUPPRESS_DISPLAY <- FALSE
+if (SUPPRESS_DISPLAY) {
+    pooled[, suppressed := dfu_person_halfyears < 11 |
+                           dm_person_halfyears < 20]
+} else {
+    pooled[, suppressed := dm_person_halfyears < 20]
+}
 pooled_active <- pooled[!(suppressed)]
 
 # ---- ZCTA geometry ----------------------------------------------------------
