@@ -290,8 +290,18 @@ epidemiological formulation.
 
 ### 8.2 Local clustering — static
 - Local Getis-Ord Gi* with adaptive KNN k = 8.
-- Significance bins: 90% (±1.65), 95% (±1.96), 99% (±2.58) using `localG_perm` with 999 permutations (FDR-adjusted).
-- LISA (Local Moran's I) as sensitivity with same weights.
+- Significance bins: 90% (±1.65), 95% (±1.96), 99% (±2.58) using
+  `localG_perm` with 999 permutations. **Significance bands use
+  single-test z-score thresholds for display (ArcGIS Pro / Anselin
+  convention).** Attempting to combine FDR-adjusted q-values with the
+  z-bands creates a spurious gap in the gradient: only z >= 2.58
+  survives, producing an artificially clean "Hot 99%" map with no
+  intermediate bands (tested 2026-04-21). The FDR-robust subset is
+  retained as a separate boolean flag (`gi_fdr_robust`) on the sf
+  object; a supplementary figure will show only those ZCTAs that
+  survive BH-FDR q < 0.05 across the 314-test family.
+- LISA (Local Moran's I) as sensitivity with same weights and same
+  display/FDR logic.
 - **Why KNN not contiguity:** Many AR ZCTAs are large and rural with few or no shared boundaries; contiguity weights leave islands. KNN ensures every ZCTA has neighbors.
 
 ### 8.3 Emerging Hot Spot Analysis (EHSA)
@@ -302,9 +312,12 @@ epidemiological formulation.
 - 8 hot categories + 8 cold categories + no pattern.
 
 ### 8.4 Multiple testing
-- Gi* and LISA use permutation-based pseudo p-values.
-- FDR (Benjamini-Hochberg) correction applied across all ZCTAs at each time step.
-- Reported significance bins use FDR-adjusted thresholds.
+- Gi* and LISA use permutation-based pseudo p-values (999 permutations).
+- Benjamini-Hochberg FDR correction is computed across all ZCTAs in
+  each analysis and stored as `gi_p_fdr` / `lisa_p_fdr`. Display maps
+  use single-test z-bands for the reasons noted in §8.2; FDR-robust
+  ZCTAs are marked via `gi_fdr_robust` / `lisa_fdr_robust` booleans
+  and highlighted in supplementary material.
 
 ---
 

@@ -140,8 +140,13 @@ zcta_sf$gi_z     <- as.numeric(gi_perm)
 zcta_sf$gi_p     <- attr(gi_perm, "internals")[, "Pr(z != E(Gi))"]
 zcta_sf$gi_p_fdr <- p.adjust(zcta_sf$gi_p, method = "BH")
 
+# Classification uses SINGLE-TEST z-score thresholds (ArcGIS Pro / Anselin
+# convention). Combining FDR-adjusted q-values with z-bands creates a
+# spurious gap in the gradient: everything failing FDR gets dumped into
+# "Not significant", so only z >= 2.58 (Hot 99%) ever appears. We instead
+# show the full gradient and mark FDR robustness as a separate flag
+# (gi_fdr_robust) in the sf object for users who need the stricter view.
 zcta_sf$gi_bin <- with(as.data.frame(zcta_sf), fcase(
-    gi_p_fdr >= FDR_ALPHA,          "Not significant",
     gi_z >=  2.58,                   "Hot 99%",
     gi_z >=  1.96 & gi_z < 2.58,     "Hot 95%",
     gi_z >=  1.65 & gi_z < 1.96,     "Hot 90%",
@@ -150,6 +155,7 @@ zcta_sf$gi_bin <- with(as.data.frame(zcta_sf), fcase(
     gi_z <= -1.65 & gi_z > -1.96,    "Cold 90%",
     default = "Not significant"
 ))
+zcta_sf$gi_fdr_robust <- zcta_sf$gi_p_fdr < FDR_ALPHA
 zcta_sf$gi_bin <- factor(zcta_sf$gi_bin, levels = c(
     "Cold 99%", "Cold 95%", "Cold 90%",
     "Not significant",
@@ -170,13 +176,16 @@ zcta_sf$lisa_p_fdr <- p.adjust(zcta_sf$lisa_p, method = "BH")
 
 mean_rate <- mean(zcta_sf$rate_per_1000, na.rm = TRUE)
 lagged    <- lag.listw(lw, zcta_sf$rate_per_1000, zero.policy = TRUE)
+# LISA: use single-test p for display (same reasoning as Gi*). Track
+# FDR-robust subset separately.
 zcta_sf$lisa_quad <- with(as.data.frame(zcta_sf), fcase(
-    lisa_p_fdr >= FDR_ALPHA, "NS",
+    lisa_p >= 0.05, "NS",
     rate_per_1000 >= mean_rate & lagged >= mean_rate, "High-High",
     rate_per_1000 <  mean_rate & lagged <  mean_rate, "Low-Low",
     rate_per_1000 >= mean_rate & lagged <  mean_rate, "High-Low",
     rate_per_1000 <  mean_rate & lagged >= mean_rate, "Low-High"
 ))
+zcta_sf$lisa_fdr_robust <- zcta_sf$lisa_p_fdr < FDR_ALPHA
 saveRDS(zcta_sf, file.path(OUT_DIR,
         sprintf("zcta_sf_lisa_pooled_%s.rds", COHORT)))
 
