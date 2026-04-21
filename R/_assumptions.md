@@ -286,22 +286,32 @@ epidemiological formulation.
   survive FDR (tested 2026-04-11). Local EB preserves the gradient that
   makes hot/cold spot detection meaningful.
 
-### 6.4 Small-cell suppression (PCD standard)
-- **Numerator threshold:** DFU cases <11 per ZCTA-bin suppressed.
-- **Denominator threshold:** DM denominator <20 per ZCTA-bin suppressed.
-- **Rule:** A ZCTA-bin cell is suppressed if EITHER condition holds.
-- **Scope:** Applied to choropleth maps and descriptive count/rate tables
-  only. EHSA input is **unsuppressed** — the space-time cube receives the
-  full ZCTA × bin panel (including small cells) so that the Mann-Kendall
-  trend test has a complete time series. Suppression is a display/privacy
-  concern, not an analytic one; EHSA output maps will suppress any ZCTA
-  whose underlying cell would have been flagged.
-- **Rationale:** PCD requires suppression of small cells to protect
-  confidentiality and statistical validity of rate estimates. Rates per
-  1,000 partially mask small counts but do not eliminate the concern.
-- **If reviewers request stricter suppression at R&R:** thresholds are
-  parameterized in `R/04_zcta_aggregation.R` and can be tightened without
-  re-running the SAS pipeline.
+### 6.4 Small-cell suppression (rev 3, 2026-04-21)
+- **PCD display rule:** numerator <11 OR denominator <20 per cell.
+- **Analytic vs display separation** (critical decision, 2026-04-21):
+  Previously the PCD rule was applied as an *exclusion criterion* in
+  the pooled Gi*/LISA analysis itself. That hid 361 low-DFU-burden
+  ZCTAs (median 2 DFU cases, median 336 DM person-halfyears) -- ZCTAs
+  that were analytically fine but failed the PCD display threshold --
+  and collapsed the cold-spot signal. Gi* then saw only 314 of 614 AR
+  ZCTAs and the map showed all-hot-or-nothing.
+- **Current default (`SUPPRESS_DISPLAY = FALSE` in
+  `R/05_static_spatial.R`):** the pooled spatial analysis requires
+  only `dm_denom >= 20` (denominator floor). This includes zero-DFU
+  and low-DFU ZCTAs in the Gi*/LISA computation, yielding 602 modeled
+  ZCTAs with a proper hot/cold gradient (91 hot, 69 cold, 442 NS under
+  single-test z-bands). Local EB smoothing handles the small-N
+  instability.
+- **For publication:** set `SUPPRESS_DISPLAY = TRUE` to re-apply the
+  PCD <11 cases rule to displayed cell-level rate labels. The Gi*
+  analysis itself remains on all 602 ZCTAs; the suppression only
+  affects the rate choropleth labels and descriptive tables.
+- **EHSA input (script 06)** is unsuppressed regardless of the flag.
+- **Rationale for keeping both:** PCD privacy rules protect displayed
+  cell-level rates but were never meant to exclude cells from
+  analytic methods. Standard spatial epi practice (Anselin, Waller &
+  Gotway) is to analyze all ZCTAs with valid denominators and apply
+  privacy rules only to displayed rate labels.
 
 ---
 
@@ -362,6 +372,65 @@ epidemiological formulation.
   ZCTAs are marked via `gi_fdr_robust` / `lisa_fdr_robust` booleans
   and highlighted in supplementary material.
 
+### 8.5 Three-outcome framework (rev 3, 2026-04-21)
+The DFU prevalence map alone is insufficient for public health
+targeting in Arkansas because it measures coding intensity and care
+engagement, which are confounded with the true spatial distribution
+of severe disease. We therefore run three complementary spatial
+analyses, each on the same enrollment-weighted denominators:
+
+| Script | Outcome | Numerator | Denominator | What it measures |
+|---|---|---|---|---|
+| `05_static_spatial.R` | DFU prevalence | DFU (Tier 2) patients | DM person-halfyears | Coding intensity + care engagement |
+| `07_amputation_spatial.R` | Amputation incidence | First lower-extremity amputation | DM person-halfyears | Disease burden + progression combined |
+| `08_amp_among_dfu_spatial.R` | Progression-given-DFU | First amputation among Tier 2 | DFU person-halfyears | Progression / access failure given disease |
+
+**Why three outcomes:**
+- Script 05 is sensitive to ICD coding variation and care engagement.
+  Ozark retirees with chronic DFU generate repeat L97 codes in primary
+  care, producing "hot" Gi* signal that does not reflect worst
+  disease burden.
+- Script 07 reduces coding sensitivity (amputation is a forced event
+  — cannot fail to code a below-knee amputation) but still mixes two
+  gradients: who develops DFU (gradient A) × who progresses to
+  amputation (gradient B).
+- Script 08 isolates gradient B by conditioning on already having
+  coded DFU. This is the cleanest measure of healthcare-access failure
+  given recognized disease.
+
+**Interpretive pattern from the continuous cohort (2026-04-21):**
+The three maps diverge meaningfully, and the divergence *is* the
+finding:
+- **Ozarks** — Hot on 05 (most coded DFU), Cold on 07 (low amputation
+  incidence), Strongly Cold on 08 (rarely progress to amputation).
+  Interpretation: **chronic mild DFU in retiree populations with
+  stable primary care**.
+- **Delta-Interior** — Normal on 05 (11.1/1000, at state average), Hot
+  on 07 (0.85/1000, elevated amputation), Normal on 08.
+  Interpretation: **true elevated disease burden; progression rate
+  average but baseline burden drives amputation totals**.
+- **Delta-Border-Memphis** — Artifactually Cold on 05 and 07 (Memphis
+  edge undercapture, §4.4), but has some Hot ZCTAs on 08.
+  Interpretation: among the DFU patients we *do* capture there,
+  progression rates are elevated. Real severity exists; overall
+  numbers depressed by data capture gaps.
+- **Arkansas River Valley (Pope, Johnson, Yell, Logan, Howard
+  counties)** — Moderate on 05, Moderately Hot on 07, **Strongly Hot
+  on 08**. Interpretation: **under-recognized progression hot spot**.
+  DFU patients in this region progress to amputation at markedly
+  higher rates than elsewhere. This finding emerges only with the
+  conditional analysis and would be missed by DFU-prevalence mapping
+  alone. **Strongest candidate for targeted intervention based on
+  this analysis.**
+
+**Global Moran's I values** (continuous cohort):
+- Script 05 (DFU prevalence):         0.18
+- Script 07 (amputation incidence):   0.30
+- Script 08 (amp given DFU):          **0.44** (strongest spatial signal)
+
+The increase from 05 → 08 reflects removal of coding-intensity noise
+and isolation of the genuine progression/access gradient.
+
 ---
 
 ## 9. Sensitivity Analyses Planned
@@ -372,6 +441,41 @@ epidemiological formulation.
 4. 2017–2022 restricted window for direct commercial/Medicare comparability.
 5. Alternative spatial weights (queen contiguity with island-fill vs KNN k=6 vs k=10).
 6. Empirical Bayes smoothing of raw rates vs raw rates for visual comparison.
+7. **Fractional cohort sensitivity** (§6.1) — rerun scripts 05/07/08 with
+   `DFU_COHORT=fractional` to verify hot spot locations are stable across
+   the continuous-enrollment inclusion criterion.
+8. **Memphis-border exclusion sensitivity** (§4.4) — rerun all three
+   spatial analyses with the five Memphis-adjacent counties (Crittenden,
+   Mississippi, Phillips, Lee, St. Francis) excluded. Stability of hot
+   spots outside those counties establishes robustness of the main
+   findings to the MNAR data-capture artifact.
+
+### 9.1 MNAR adjustment options for Memphis edge (deferred — Paper 2)
+The Memphis-border undercapture (§4.4) is formally Missing Not At
+Random — missingness is correlated with both location (distance to
+Memphis) and outcome (working-age adults with DFU who use Memphis
+care). Candidate adjustment strategies, ranked by rigor:
+
+- **Option A — Exclusion sensitivity** (planned, §9.#8): primary
+  robustness check, simplest defense.
+- **Option B — LODES commuter-based correction:** use Census LEHD
+  Origin-Destination employment data to compute, per AR ZCTA, the
+  fraction of workers employed in Shelby County TN. Use as
+  multiplicative correction factor for observed rates under the
+  assumption that TN-employed AR residents carry TN-licensed
+  commercial insurance (invisible to AR APCD).
+- **Option C — Spatial regression with distance-to-Memphis and/or
+  p_TN_commute covariates:** formal adjustment in the Paper 2 panel
+  regression; hot-spot analysis then runs on residuals.
+- **Option D — External benchmarking** against CDC Diabetes Atlas,
+  AR Hospital Discharge Data (HDD), or AHRQ SID to estimate
+  county-level capture rates.
+- **Option E — Pattern mixture / selection model** (Little & Rubin):
+  specify plausible δ for how missing cases differ from captured;
+  report how hot-spot conclusions vary across the δ range.
+
+Deferred to Paper 2 (regression). For Paper 1, Option A sensitivity
+and §4.4 Limitations language are the committed approach.
 
 ---
 
@@ -380,12 +484,30 @@ epidemiological formulation.
 1. **Case definition validity** — no chart validation; claims-based only.
 2. **Claim-level temporal matching not available** — Tier 2 is approximation (§3.4).
 3. **Fixed ZCTA per patient** — relocation not captured (§4.1).
-4. **Ambiguous-DM fraction is large** — likely coding-driven, not biological.
-5. **Left censoring** — DM history before 2017/2014 unknown (§5.4).
-6. **Medicare 2022 cutoff** — 2023–2024 EHSA on commercial-only (§5.5).
-7. **Race unavailable for commercial** — racial disparity analysis limited to Medicare.
-8. **Uninsured not captured** — AR APCD is insured-population only; uninsured diabetics and those paying cash are invisible.
-9. **Dual-eligibles simplified to Medicare** — commercial history before Medicare enrollment lost.
-10. **ZCTA = geographic proxy for neighborhood** — does not align with care service areas, food environments, or census tracts.
-11. **Sample size for small-area estimation** — some rural ZCTAs have DM denominators <11 and are suppressed.
-12. **No adjustment for age, sex, race in descriptive prevalence** — crude rates only; adjustment deferred to Paper 2.
+4. **Memphis edge effect — MNAR undercapture in five Arkansas
+   counties** (§4.4). Crittenden, Mississippi, Phillips, Lee, and
+   St. Francis counties have depressed DFU and amputation rates
+   driven by AR residents using TN-based employer commercial
+   insurance, TN-licensed Medicare Advantage, the Memphis VA Medical
+   Center, or self-pay/charity care at Memphis safety-net providers.
+   AR Medicaid and Medicare FFS are fully captured. Primary handling:
+   Option A exclusion sensitivity (§9); full MNAR adjustment via
+   LODES/regression/pattern-mixture deferred to Paper 2.
+5. **Identity-resolution collisions** — APCD does not have SSN; same
+   person switching insurers may receive a new `apcd_unique_id` with
+   no linkage to the old record (§6.1). Direction of bias is
+   conservative (deflates rates in high-churn areas).
+6. **Ambiguous-DM fraction is large** — likely coding-driven, not biological.
+7. **Left censoring** — DM history before 2017/2014 unknown (§5.4).
+8. **Medicare 2022 cutoff** — 2023–2024 EHSA on commercial-only (§5.5).
+9. **Race unavailable for commercial** — racial disparity analysis limited to Medicare.
+10. **Uninsured not captured** — AR APCD is insured-population only; uninsured diabetics and those paying cash are invisible.
+11. **Dual-eligibles simplified to Medicare** — commercial history before Medicare enrollment lost.
+12. **ZCTA = geographic proxy for neighborhood** — does not align with care service areas, food environments, or census tracts.
+13. **Sample size for small-area estimation** — under current analytic
+    threshold (dm_denom ≥ 20), 602 of 614 AR ZCTAs are modeled. The
+    12 excluded have truly too-sparse diabetic populations.
+14. **No adjustment for age, sex, race in descriptive prevalence** — crude rates only; adjustment deferred to Paper 2.
+15. **DFU coding intensity ≠ disease burden** — rationale for the
+    three-outcome framework (§8.5). Reporting DFU prevalence alone
+    would mislead public health targeting in Arkansas.
