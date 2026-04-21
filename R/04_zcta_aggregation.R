@@ -9,23 +9,38 @@
 #   - Meteorological seasonal bins -> 24 slices (SENSITIVITY)
 #   - Calendar year bins    -> 6 slices    (DESCRIPTIVE only)
 #
-# Source of bin membership: step3b_bin_activity.sas outputs
-#   bin_activity_commercial.csv and bin_activity_medicare.csv, which
-#   provide one row per (patient x calendar year x half x season x season_year)
-#   with had_dm / had_l97 / had_debridement / had_amputation / had_combo flags.
+# *** Two-cohort design (assumptions §6.1, rev 3, 2026-04-21) ***
+# Denominator construction is enrollment-based, not claims-observed:
+#
+#   COHORT 1 (PRIMARY)  -- continuously enrolled all 72 months
+#     Source: cohort_continuous.csv from step3c_enrollment.sas
+#     Each patient contributes 1.0 person-halfyear to EVERY bin for which
+#     their ZCTA assignment is valid -- they are at risk throughout the
+#     study window by definition.
+#
+#   COHORT 2 (SENSITIVITY)  -- fractional person-time
+#     Source: cohort_fractional.csv from step3c_enrollment.sas
+#     Each patient contributes enrolled_months / 6 person-halfyears per bin.
+#     Per-bin floor of >=3 of 6 months (50%) applied here; bins below the
+#     floor contribute 0 for that patient (rationale: "more unobserved
+#     than observed"). Patient still contributes to other bins where the
+#     floor is met.
 #
 # DFU-aware amputation censoring rule (assumptions §5.3):
 #   Censor patient from both numerator and denominator in bins at or after
 #   first amputation ONLY if first amputation occurred on or after first DFU.
-#   Amputations that precede the first DFU claim are not treated as censoring
-#   events (those are historical and unrelated to the incident ulcer).
 #
 # Small-cell suppression (assumptions §6.4):
 #   Cell suppressed if numerator < NUM_THRESH (default 11) OR
 #                     denominator < DEN_THRESH (default 20).
+#   Suppression is applied for DISPLAY ONLY; EHSA input (script 06) is
+#   built on unsuppressed panels.
 #
-# Output: zcta x bin panel keyed on (zcta, bin_id) with
-#   dm_denom, dfu_num, rate_per_1000, suppressed, bin_start, bin_end, bin_label.
+# Outputs (per cohort):
+#   panel_halfyear_<cohort>.rds     -- PRIMARY EHSA input
+#   panel_seasonal_<cohort>.rds     -- seasonal sensitivity
+#   panel_annual_<cohort>.rds       -- descriptive
+#   + matching .csv copies
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -45,20 +60,41 @@ BIN_MCR     <- file.path(DROPBOX_DIR, "bin_activity_medicare.csv")
 OUT_DIR     <- file.path(DROPBOX_DIR, "outputs", "panels")
 dir_create(OUT_DIR)
 
-TIER_RDS    <- file.path(ANALYTIC, "02_tiered.rds")
+TIER_RDS         <- file.path(ANALYTIC, "02_tiered.rds")
+ENROLL_CONT_CSV  <- file.path(DROPBOX_DIR, "cohort_continuous.csv")
+ENROLL_FRAC_CSV  <- file.path(DROPBOX_DIR, "cohort_fractional.csv")
 
 # ---- Parameters -------------------------------------------------------------
 STUDY_YEARS  <- 2017:2022
 NUM_THRESH   <- 11L     # suppress numerator < 11
 DEN_THRESH   <- 20L     # suppress denominator < 20
+BIN_MONTH_FLOOR <- 3L   # >=3 of 6 months required for a bin to contribute
+                         # under the fractional cohort (assumptions §6.1)
+
+BIN_COLS <- c("m_h1_2017", "m_h2_2017",
+              "m_h1_2018", "m_h2_2018",
+              "m_h1_2019", "m_h2_2019",
+              "m_h1_2020", "m_h2_2020",
+              "m_h1_2021", "m_h2_2021",
+              "m_h1_2022", "m_h2_2022")
+
+HALF_BIN_IDS <- c("2017-H1", "2017-H2", "2018-H1", "2018-H2",
+                  "2019-H1", "2019-H2", "2020-H1", "2020-H2",
+                  "2021-H1", "2021-H2", "2022-H1", "2022-H2")
 
 # ---- Load tiered patient-level data -----------------------------------------
 stopifnot(file_exists(TIER_RDS), file_exists(BIN_COMM), file_exists(BIN_MCR))
 pt <- readRDS(TIER_RDS)
-pt <- pt[dm_primary == 1L]  # PRIMARY population
+pt <- pt[dm_primary == 1L]  # PRIMARY population (T1D + T2D, exclude AMBIGUOUS)
 
-# Attach zcta + tier flags we need
-pt_keys <- pt[, .(data_source, patient_id, study_id, zcta,
+# Attach zcta + tier flags we need. study_id = apcd_unique_id || gender,
+# so we recover apcd_unique_id by stripping the trailing M/F/U character.
+pt[, apcd_unique_id := fifelse(
+        nchar(study_id) >= 2,
+        substr(study_id, 1, nchar(study_id) - 1L),
+        NA_character_
+)]
+pt_keys <- pt[, .(data_source, patient_id, study_id, apcd_unique_id, zcta,
                   tier2, first_dfu_date, first_amp_date,
                   first_dm_year, last_dm_year)]
 
@@ -70,28 +106,16 @@ ba_mcr  <- fread(BIN_MCR, colClasses = list(character = "bene_id"))
 ba_comm[, data_source := "COMMERCIAL"]
 ba_mcr[,  data_source := "MEDICARE"]
 
-# Reconstruct the same patient_id key that step5 builds:
-#   commercial: catx('|', submitter, group_policy, person_code) LENGTH=80
-#     IMPORTANT: SAS truncates this to 80 chars. The encrypted group_policy
-#     alone can exceed 80 chars, so the |person_code suffix is often clipped.
-#     We must replicate the exact same truncation here.
-#   medicare: bene_id (no truncation issue)
+# Reconstruct the same patient_id key that step5 builds (LENGTH=80 SAS
+# silent truncation; see assumptions §1 and prior session notes).
 ba_comm[, patient_id := substr(paste(submitter, group_policy, person_code,
                                      sep = "|"), 1, 80)]
-# Medicare: step5 uses `bene_id as patient_id length=80`, so the encrypted
-# bene_id (88 chars) is also truncated. Replicate here.
 ba_mcr[,  patient_id := substr(as.character(bene_id), 1, 80)]
-ba_comm_keyed <- ba_comm
-ba_mcr_keyed  <- ba_mcr
 
-# step3b emits: had_dm, had_l97, had_combo, had_dfu (== l97 or combo).
-# Debridement/amputation flags come from the patient-level analytic file
-# (has_debridement / first_amp_date), NOT from bin activity.
 keep_cols <- c("data_source", "patient_id", "bin_year", "half",
                "season", "season_year",
                "had_dm", "had_l97", "had_combo", "had_dfu")
-ba <- rbindlist(list(ba_comm_keyed[, ..keep_cols],
-                     ba_mcr_keyed[,  ..keep_cols]),
+ba <- rbindlist(list(ba_comm[, ..keep_cols], ba_mcr[, ..keep_cols]),
                 use.names = TRUE)
 
 # Primary window filter
@@ -101,22 +125,13 @@ ba <- ba[bin_year %in% STUDY_YEARS]
 ba <- merge(ba, pt_keys, by = c("data_source", "patient_id"),
             all.x = FALSE, all.y = FALSE)
 
-# ---- Build three bin labelings ----------------------------------------------
-# 1. Half-year (PRIMARY) --------------------------------------------------
+# ---- Build bin labelings ----------------------------------------------------
 ba[, half_bin := paste0(bin_year, "-H", half)]
-
-# 2. Seasonal (SENSITIVITY) - keys on season_year to push December to next winter
 ba[, season_bin := paste0(season_year, "-", season)]
-# Drop seasonal rows that escape the study window due to December rollover
 ba <- ba[season_year >= min(STUDY_YEARS) & season_year <= max(STUDY_YEARS)]
-
-# 3. Annual (descriptive) -------------------------------------------------
 ba[, year_bin := as.character(bin_year)]
 
 # ---- DFU-aware amputation censoring -----------------------------------------
-# For each claim-bin row, mark whether the patient is censored as of that bin.
-# A row is censored if: amp_year is not NA AND amp_year <= bin_year AND
-# amp_year >= first_dfu_year_or_infinite.
 ba[, amp_year := as.integer(format(first_amp_date, "%Y"))]
 ba[, dfu_year := as.integer(format(first_dfu_date, "%Y"))]
 ba[, censor_year := fifelse(
@@ -124,67 +139,130 @@ ba[, censor_year := fifelse(
     amp_year,
     NA_integer_
 )]
-# Censor the bin AFTER the amputation year (inclusive of years strictly >
-# censor_year). The amputation year itself still counts in numerator since
-# the DFU existed up to that point.
 ba[, censored := !is.na(censor_year) & bin_year > censor_year]
-
 ba_active <- ba[censored == FALSE]
 
-# ---- Aggregate to zcta x bin ------------------------------------------------
-# Numerator: at least one DFU-indicating claim in the bin (Tier 2 primary)
-#   = patient is in tier2 cohort AND (had_l97 == 1 OR had_combo == 1) in bin
-# Denominator: active diabetic in the bin
-#   = had_dm == 1 in bin (the bin-extraction already restricts to DM-positive
-#     claim rows where had_dm flag = 1)
-# Deduplicate patient per (zcta, bin) before counting.
-
-aggregate_panel <- function(bin_col, label) {
-    d <- ba_active[, .(
-        in_dm_denom = as.integer(any(had_dm == 1L)),
-        in_dfu_num  = as.integer(tier2[1] == 1L &
-                                 any(had_l97 == 1L | had_combo == 1L))
-    ), by = c("zcta", bin_col, "patient_id")]
-
-    panel <- d[, .(
-        dm_denom = sum(in_dm_denom),
-        dfu_num  = sum(in_dfu_num)
-    ), by = c("zcta", bin_col)]
-    setnames(panel, bin_col, "bin_id")
-    panel[, bin_type := label]
-    panel[, rate_per_1000 := 1000 * dfu_num / pmax(dm_denom, 1L)]
-    panel[, suppressed := dfu_num < NUM_THRESH | dm_denom < DEN_THRESH]
-    panel[]
+# ---- Load cohort enrollment files -------------------------------------------
+# Both CSVs are keyed on apcd_unique_id and carry the 12 monthly-count
+# columns m_h1_2017 ... m_h2_2022 (see step3c_enrollment.sas).
+load_cohort <- function(path, label) {
+    if (!file_exists(path)) {
+        warning("Cohort file not found: ", path,
+                " -- skipping '", label, "' cohort.")
+        return(NULL)
+    }
+    dt <- fread(path, colClasses = list(character = "apcd_unique_id"))
+    # Expect apcd_unique_id plus the 12 m_* columns
+    missing_cols <- setdiff(c("apcd_unique_id", BIN_COLS), names(dt))
+    if (length(missing_cols) > 0) {
+        stop("Cohort ", label, " missing columns: ",
+             paste(missing_cols, collapse = ", "))
+    }
+    dt
 }
 
-panel_half    <- aggregate_panel("half_bin",   "halfyear")
-panel_seasonal<- aggregate_panel("season_bin", "seasonal")
-panel_annual  <- aggregate_panel("year_bin",   "annual")
+cohort_cont <- load_cohort(ENROLL_CONT_CSV, "continuous")
+cohort_frac <- load_cohort(ENROLL_FRAC_CSV, "fractional")
 
-# ---- Rectangularize: ensure every (zcta x bin) cell exists -----------------
-rectangularize <- function(panel, all_bins) {
-    all_zctas <- sort(unique(panel$zcta))
+# ---- Compute numerator per (zcta, bin) --------------------------------------
+# Numerator is cohort-independent in the sense that the service date proves
+# enrollment at that moment. But we restrict to patients IN the cohort --
+# a patient excluded from the continuous cohort cannot contribute to its
+# numerator. We apply the cohort filter to ba_active before counting.
+
+numerator_panel <- function(ba_active_filtered, bin_col) {
+    d <- ba_active_filtered[, .(
+        in_dfu_num = as.integer(tier2[1] == 1L &
+                                any(had_l97 == 1L | had_combo == 1L))
+    ), by = c("zcta", bin_col, "patient_id")]
+    out <- d[, .(dfu_num = sum(in_dfu_num)), by = c("zcta", bin_col)]
+    setnames(out, bin_col, "bin_id")
+    out
+}
+
+# ---- Compute enrollment-based denominator per (zcta, bin) -------------------
+# For each patient in the cohort with a known ZCTA (from pt_keys), the
+# per-bin contribution is:
+#   continuous cohort: 1.0 in every bin (they're enrolled all 72 months)
+#   fractional cohort: (m_hX_YYYY / 6) when m_hX_YYYY >= BIN_MONTH_FLOOR
+# We also respect DFU-aware amputation censoring by zeroing out bins at
+# bin_year > censor_year for that patient.
+
+denominator_panel <- function(cohort_dt, mode) {
+    stopifnot(mode %in% c("continuous", "fractional"))
+
+    # ZCTA and censor info per patient from pt_keys (unique per study person)
+    zcta_lookup <- unique(pt_keys[!is.na(zcta), .(
+        apcd_unique_id,
+        zcta,
+        amp_year    = as.integer(format(first_amp_date, "%Y")),
+        dfu_year    = as.integer(format(first_dfu_date, "%Y"))
+    )])
+    zcta_lookup[, censor_year := fifelse(
+        !is.na(amp_year) & (is.na(dfu_year) | amp_year >= dfu_year),
+        amp_year, NA_integer_
+    )]
+
+    # Join cohort members to their ZCTA (inner join -- drop cohort patients
+    # we cannot geographically assign, e.g., non-AR ZIP excluded upstream)
+    coh <- merge(cohort_dt[, c("apcd_unique_id", BIN_COLS), with = FALSE],
+                 zcta_lookup, by = "apcd_unique_id", all.x = FALSE)
+
+    if (nrow(coh) == 0L) return(data.table())
+
+    # Reshape wide -> long on the 12 bin columns
+    long <- melt(coh,
+                 id.vars = c("apcd_unique_id", "zcta", "censor_year"),
+                 measure.vars = BIN_COLS,
+                 variable.name = "bin_col", value.name = "months")
+    long[, months := as.integer(months)]
+    long[is.na(months), months := 0L]
+
+    # Map m_h1_2017 -> "2017-H1" etc.
+    long[, bin_id := sub("^m_h([12])_(\\d{4})$", "\\2-H\\1",
+                         as.character(bin_col))]
+    long[, bin_year := as.integer(sub("^(\\d{4}).*$", "\\1", bin_id))]
+
+    # Apply DFU-aware amputation censoring: zero out bins beyond censor year
+    long[!is.na(censor_year) & bin_year > censor_year, months := 0L]
+
+    # Compute per-patient per-bin person-halfyear contribution
+    if (mode == "continuous") {
+        # Continuous cohort: full 1.0 contribution regardless of 'months'
+        # value (they're by definition 6/6 in every bin). We still zero
+        # out post-censoring bins.
+        long[, contrib := fifelse(months >= 1L, 1.0, 0.0)]
+    } else {
+        # Fractional: contribute months/6, but only if >= BIN_MONTH_FLOOR
+        long[, contrib := fifelse(months >= BIN_MONTH_FLOOR,
+                                  months / 6.0, 0.0)]
+    }
+
+    # Aggregate to ZCTA x bin person-halfyears
+    panel <- long[, .(dm_denom = sum(contrib)),
+                  by = .(zcta, bin_id)]
+    panel
+}
+
+# ---- Assemble, rectangularize, save -----------------------------------------
+rectangularize_and_decorate <- function(num, den, all_bins, bin_type_label) {
+    # Inner join num <-> den would drop ZCTAs that have denom but no num
+    # (common in rural areas). We outer-join and fill missing num with 0,
+    # and drop cells with exactly zero denominator (no one at risk there).
+    all_zctas <- sort(unique(c(num$zcta, den$zcta)))
     grid <- CJ(zcta = all_zctas, bin_id = all_bins)
-    out  <- merge(grid, panel, by = c("zcta", "bin_id"), all.x = TRUE)
-    out[is.na(dm_denom), dm_denom := 0L]
+    out  <- merge(grid, num, by = c("zcta", "bin_id"), all.x = TRUE)
+    out  <- merge(out,  den, by = c("zcta", "bin_id"), all.x = TRUE)
+    out[is.na(dm_denom), dm_denom := 0]
     out[is.na(dfu_num),  dfu_num  := 0L]
-    out[, bin_type := panel$bin_type[1]]
-    out[, rate_per_1000 := 1000 * dfu_num / pmax(dm_denom, 1L)]
+    out[, bin_type := bin_type_label]
+    out[, rate_per_1000 := 1000 * dfu_num / pmax(dm_denom, 1)]
     out[, suppressed := dfu_num < NUM_THRESH | dm_denom < DEN_THRESH]
     out[]
 }
 
-bins_half     <- sort(unique(panel_half$bin_id))
-bins_seasonal <- sort(unique(panel_seasonal$bin_id))
-bins_annual   <- sort(unique(panel_annual$bin_id))
-
-panel_half_rect     <- rectangularize(panel_half,     bins_half)
-panel_seasonal_rect <- rectangularize(panel_seasonal, bins_seasonal)
-panel_annual_rect   <- rectangularize(panel_annual,   bins_annual)
-
-# ---- Bin date metadata for EHSA cube ----------------------------------------
 half_dates <- data.table(
-    bin_id    = c(sapply(STUDY_YEARS, function(y) paste0(y, c("-H1", "-H2")))),
+    bin_id    = HALF_BIN_IDS,
     bin_start = as.Date(c(sapply(STUDY_YEARS,
                     function(y) c(sprintf("%d-01-01", y),
                                   sprintf("%d-07-01", y))))),
@@ -192,10 +270,7 @@ half_dates <- data.table(
                     function(y) c(sprintf("%d-06-30", y),
                                   sprintf("%d-12-31", y)))))
 )
-panel_half_rect <- merge(panel_half_rect, half_dates, by = "bin_id", all.x = TRUE)
 
-season_months <- list(W = c(12, 1, 2), S = c(3, 4, 5),
-                      U = c(6, 7, 8), A = c(9, 10, 11))
 season_dates <- rbindlist(lapply(STUDY_YEARS, function(y) {
     data.table(
         bin_id    = c(paste0(y, "-W"), paste0(y, "-S"),
@@ -210,37 +285,125 @@ season_dates <- rbindlist(lapply(STUDY_YEARS, function(y) {
                               sprintf("%d-11-30", y)))
     )
 }))
-panel_seasonal_rect <- merge(panel_seasonal_rect, season_dates,
-                             by = "bin_id", all.x = TRUE)
 
-# ---- Suppression report -----------------------------------------------------
-supp_report <- rbind(
-    panel_half_rect[,     .(bin_type = "halfyear",
-                            n_cells = .N,
-                            n_supp = sum(suppressed),
-                            pct_supp = round(100 * mean(suppressed), 1))],
-    panel_seasonal_rect[, .(bin_type = "seasonal",
-                            n_cells = .N,
-                            n_supp = sum(suppressed),
-                            pct_supp = round(100 * mean(suppressed), 1))],
-    panel_annual_rect[,   .(bin_type = "annual",
-                            n_cells = .N,
-                            n_supp = sum(suppressed),
-                            pct_supp = round(100 * mean(suppressed), 1))]
-)
+build_cohort_panels <- function(cohort_dt, cohort_label, mode) {
+    message("\n=== Building ", cohort_label, " cohort panels ===")
+
+    # Filter bin-activity to patients in the cohort (for numerator)
+    cohort_ids <- unique(cohort_dt$apcd_unique_id)
+    # pt_keys carries apcd_unique_id extracted from study_id; rebuild the
+    # filter via patient_id -> apcd_unique_id through pt_keys
+    pt_in_cohort <- pt_keys[apcd_unique_id %in% cohort_ids,
+                            unique(patient_id)]
+    ba_cohort    <- ba_active[patient_id %in% pt_in_cohort]
+
+    message("  Cohort size:       ", uniqueN(cohort_ids))
+    message("  Bin-activity rows: ", nrow(ba_cohort))
+
+    # Numerator panels
+    num_half  <- numerator_panel(ba_cohort, "half_bin")
+    num_seas  <- numerator_panel(ba_cohort, "season_bin")
+    num_year  <- numerator_panel(ba_cohort, "year_bin")
+
+    # Denominator panels (half-year only for cohort enrollment;
+    # seasonal/annual derived by proportional allocation)
+    den_half  <- denominator_panel(cohort_dt, mode)
+
+    # Seasonal: allocate each half-year's enrollment proportionally into
+    # the 2 seasonal bins that fall within it. This is a reasonable
+    # approximation -- the MEST doesn't give us sub-month granularity.
+    # Mapping (assumes contiguous enrollment within bin):
+    #   H1 (Jan-Jun)  -> winter(Dec-Feb, 2mo of 3) + spring(3mo) + summer(3mo, but only Jun=1mo)
+    # Simpler: take the corresponding half's denom / 2 per season bin.
+    # This is reported as a sensitivity and doesn't need to be exact.
+    den_seas <- den_half[, .(
+        s1 = sprintf("%s-W", sub("-H.*", "", bin_id)),
+        s2 = sprintf("%s-S", sub("-H.*", "", bin_id)),
+        s3 = sprintf("%s-U", sub("-H.*", "", bin_id)),
+        s4 = sprintf("%s-A", sub("-H.*", "", bin_id)),
+        dm_half = dm_denom,
+        zcta = zcta,
+        half = sub(".*-(H[12])$", "\\1", bin_id)
+    )]
+    den_seas_long <- rbindlist(list(
+        den_seas[half == "H1", .(zcta, bin_id = s1, dm_denom = dm_half / 2)],
+        den_seas[half == "H1", .(zcta, bin_id = s2, dm_denom = dm_half / 2)],
+        den_seas[half == "H2", .(zcta, bin_id = s3, dm_denom = dm_half / 2)],
+        den_seas[half == "H2", .(zcta, bin_id = s4, dm_denom = dm_half / 2)]
+    ))[, .(dm_denom = sum(dm_denom)), by = .(zcta, bin_id)]
+
+    # Annual: sum the two halves
+    den_year <- den_half[, .(
+        dm_denom = sum(dm_denom)
+    ), by = .(zcta, year = sub("-H.*", "", bin_id))]
+    setnames(den_year, "year", "bin_id")
+
+    # Rectangularize + decorate
+    bins_half    <- HALF_BIN_IDS
+    bins_season  <- season_dates$bin_id
+    bins_annual  <- as.character(STUDY_YEARS)
+
+    panel_half    <- rectangularize_and_decorate(num_half, den_half,
+                                                  bins_half, "halfyear")
+    panel_season  <- rectangularize_and_decorate(num_seas, den_seas_long,
+                                                  bins_season, "seasonal")
+    panel_annual  <- rectangularize_and_decorate(num_year, den_year,
+                                                  bins_annual, "annual")
+
+    panel_half    <- merge(panel_half,   half_dates,   by = "bin_id", all.x = TRUE)
+    panel_season  <- merge(panel_season, season_dates, by = "bin_id", all.x = TRUE)
+
+    # Save
+    suffix <- paste0("_", cohort_label)
+    saveRDS(panel_half,   file.path(OUT_DIR,
+            sprintf("panel_halfyear%s.rds", suffix)))
+    saveRDS(panel_season, file.path(OUT_DIR,
+            sprintf("panel_seasonal%s.rds", suffix)))
+    saveRDS(panel_annual, file.path(OUT_DIR,
+            sprintf("panel_annual%s.rds", suffix)))
+    fwrite(panel_half,    file.path(OUT_DIR,
+            sprintf("panel_halfyear%s.csv", suffix)))
+    fwrite(panel_season,  file.path(OUT_DIR,
+            sprintf("panel_seasonal%s.csv", suffix)))
+    fwrite(panel_annual,  file.path(OUT_DIR,
+            sprintf("panel_annual%s.csv", suffix)))
+
+    message("  Half-year cells: ", nrow(panel_half),
+            " (", sum(panel_half$suppressed), " suppressed)")
+    message("  Seasonal cells:  ", nrow(panel_season),
+            " (", sum(panel_season$suppressed), " suppressed)")
+    message("  Annual cells:    ", nrow(panel_annual),
+            " (", sum(panel_annual$suppressed), " suppressed)")
+
+    invisible(list(half = panel_half, seasonal = panel_season,
+                   annual = panel_annual))
+}
+
+# ---- Run both cohorts -------------------------------------------------------
+results <- list()
+if (!is.null(cohort_cont)) {
+    results$continuous <- build_cohort_panels(cohort_cont,
+                                              "continuous", "continuous")
+}
+if (!is.null(cohort_frac)) {
+    results$fractional <- build_cohort_panels(cohort_frac,
+                                              "fractional", "fractional")
+}
+
+# ---- Suppression summary across cohorts -------------------------------------
+supp_report <- rbindlist(lapply(names(results), function(lab) {
+    data.table(
+        cohort    = lab,
+        bin_type  = "halfyear",
+        n_cells   = nrow(results[[lab]]$half),
+        n_supp    = sum(results[[lab]]$half$suppressed),
+        pct_supp  = round(100 * mean(results[[lab]]$half$suppressed), 1)
+    )
+}))
 print(supp_report)
-
-# ---- Save -------------------------------------------------------------------
-saveRDS(panel_half_rect,     file.path(OUT_DIR, "panel_halfyear.rds"))
-saveRDS(panel_seasonal_rect, file.path(OUT_DIR, "panel_seasonal.rds"))
-saveRDS(panel_annual_rect,   file.path(OUT_DIR, "panel_annual.rds"))
-fwrite(panel_half_rect,      file.path(OUT_DIR, "panel_halfyear.csv"))
-fwrite(panel_seasonal_rect,  file.path(OUT_DIR, "panel_seasonal.csv"))
-fwrite(panel_annual_rect,    file.path(OUT_DIR, "panel_annual.csv"))
-fwrite(supp_report,          file.path(OUT_DIR, "suppression_report.csv"))
+fwrite(supp_report, file.path(OUT_DIR, "suppression_report.csv"))
 
 message("\n04_zcta_aggregation.R complete.")
 message("Panels written to: ", OUT_DIR)
-message("Primary EHSA input: panel_halfyear.rds (", nrow(panel_half_rect),
-        " ZCTA x bin cells; ",
-        sum(panel_half_rect$suppressed), " suppressed)")
+message("Primary EHSA input: panel_halfyear_continuous.rds")
+message("Sensitivity input:  panel_halfyear_fractional.rds")

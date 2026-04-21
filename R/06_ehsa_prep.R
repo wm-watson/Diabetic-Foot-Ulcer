@@ -50,8 +50,26 @@ OUT_DIR     <- file.path(DROPBOX_DIR, "outputs", "ehsa_input")
 dir_create(OUT_DIR)
 
 # ---- Load panels ------------------------------------------------------------
-panel_half     <- readRDS(file.path(PANELS, "panel_halfyear.rds"))
-panel_seasonal <- readRDS(file.path(PANELS, "panel_seasonal.rds"))
+# Cohort selection is controlled by DFU_COHORT env var; default is the
+# primary (continuous enrollment) cohort. Fractional is the sensitivity
+# input for the EHSA robustness check. See assumptions §6.1.
+COHORT <- Sys.getenv("DFU_COHORT", "continuous")
+load_panel <- function(base) {
+    f <- file.path(PANELS, sprintf("panel_%s_%s.rds", base, COHORT))
+    if (!file.exists(f)) {
+        legacy <- file.path(PANELS, sprintf("panel_%s.rds", base))
+        if (file.exists(legacy)) {
+            message("Using legacy ", basename(legacy),
+                    " (pre-cohort pipeline)")
+            return(readRDS(legacy))
+        }
+        stop("Panel not found: ", f)
+    }
+    message("Using cohort panel: ", basename(f))
+    readRDS(f)
+}
+panel_half     <- load_panel("halfyear")
+panel_seasonal <- load_panel("seasonal")
 
 # ---- Build EHSA CSVs --------------------------------------------------------
 make_ehsa <- function(panel, outfile) {
@@ -71,19 +89,30 @@ make_ehsa <- function(panel, outfile) {
 }
 
 ehsa_half <- make_ehsa(panel_half,
-                       file.path(OUT_DIR, "ehsa_input_halfyear.csv"))
+                       file.path(OUT_DIR,
+                                 sprintf("ehsa_input_halfyear_%s.csv", COHORT)))
 ehsa_seas <- make_ehsa(panel_seasonal,
-                       file.path(OUT_DIR, "ehsa_input_seasonal.csv"))
+                       file.path(OUT_DIR,
+                                 sprintf("ehsa_input_seasonal_%s.csv", COHORT)))
 
 # ---- Export ZCTA shapefile (matching ZCTAs present in panel) ----------------
 # tigris::zctas(state=) only works for 2000/2010 vintages. For 2020, pull the
-# national ZCTA file and subset to Arkansas ZCTAs (those starting with 71/72).
+# national ZCTA file and SPATIALLY clip to the Arkansas state polygon. A
+# naive prefix filter on "71"/"72" includes Louisiana ZCTAs (LA = 700-714);
+# we restrict to ZCTAs whose centroid lies inside AR.
 zcta_set <- union(unique(panel_half$zcta), unique(panel_seasonal$zcta))
+
+ar_state <- states(progress_bar = FALSE)
+ar_state <- ar_state[ar_state$STUSPS == "AR", ]
+ar_state <- st_transform(ar_state, 5070)
+
 ar <- zctas(year = 2020, progress_bar = FALSE)
 ar$zcta <- ar$ZCTA5CE20
-ar <- ar[substr(ar$zcta, 1, 2) %in% c("71", "72"), ]
-ar <- ar[ar$zcta %in% zcta_set, ]
 ar <- st_transform(ar, 5070)
+ar_centroids <- st_centroid(ar)
+inside_ar    <- st_intersects(ar_centroids, ar_state, sparse = FALSE)[, 1]
+ar <- ar[inside_ar, ]
+ar <- ar[ar$zcta %in% zcta_set, ]
 
 st_write(ar, file.path(OUT_DIR, "ar_zctas_for_ehsa.shp"),
          delete_dsn = TRUE, quiet = TRUE)

@@ -41,40 +41,79 @@ NPERM        <- 999L
 FDR_ALPHA    <- 0.05
 
 # ---- Load panel -------------------------------------------------------------
-panel <- readRDS(file.path(PANELS, "panel_halfyear.rds"))
+# Cohort selection is controlled by DFU_COHORT env var; default is the
+# primary (continuous enrollment) cohort. See assumptions §6.1 for the
+# two-cohort design rationale.
+COHORT     <- Sys.getenv("DFU_COHORT", "continuous")
+panel_file <- file.path(PANELS, sprintf("panel_halfyear_%s.rds", COHORT))
+if (!file.exists(panel_file)) {
+    # Back-compat: fall back to the pre-rev-3 single-cohort panel file
+    legacy <- file.path(PANELS, "panel_halfyear.rds")
+    if (file.exists(legacy)) {
+        message("Using legacy panel_halfyear.rds (pre-cohort pipeline)")
+        panel_file <- legacy
+    } else {
+        stop("Panel not found: ", panel_file)
+    }
+}
+message("Using cohort panel: ", basename(panel_file))
+panel <- readRDS(panel_file)
 
-# Pool all 12 H1/H2 bins: patient-bins must not be double-counted as patients
-# in the pooled count, so we take max(dm_denom, dfu_num) across bins per ZCTA
-# when pooling -- but for a descriptive pooled rate we use SUM of patient-bins
-# as person-halfyears at risk. This gives prevalence per 1000 person-halfyears.
-pooled <- panel[!(suppressed),
-                .(dm_person_halfyears = sum(dm_denom),
-                  dfu_person_halfyears = sum(dfu_num)),
+# Pool all 12 H1/H2 bins, summing person-halfyears at risk and DFU
+# patient-bins. This gives prevalence per 1000 person-halfyears. Per-bin
+# suppression is a privacy guardrail for the time-resolved EHSA inputs and
+# bin-level displays; for the pooled descriptive map we sum the *full*
+# panel and then re-apply suppression at the pooled scale (a much weaker
+# filter, since pooling 12 bins lifts most rural ZCTAs above threshold).
+pooled <- panel[, .(dm_person_halfyears  = sum(dm_denom),
+                    dfu_person_halfyears = sum(dfu_num)),
                 by = zcta]
 pooled[, rate_per_1000 := 1000 * dfu_person_halfyears /
                           pmax(dm_person_halfyears, 1L)]
-
-# Re-apply suppression at pooled level (should be rare after pooling)
 pooled[, suppressed := dfu_person_halfyears < 11 | dm_person_halfyears < 20]
 pooled_active <- pooled[!(suppressed)]
 
 # ---- ZCTA geometry ----------------------------------------------------------
 # tigris::zctas(state=) is only valid for 2000/2010 vintages; for 2020 we
-# pull the national ZCTA file and subset to Arkansas ZCTAs (prefix 71/72).
+# pull the national ZCTA file and SPATIALLY clip to the Arkansas state
+# polygon. A naive prefix filter on "71"/"72" wrongly includes Louisiana
+# ZCTAs (LA = 700-714). We keep ZCTAs whose centroid lies inside AR.
+ar_state <- states(progress_bar = FALSE)
+ar_state <- ar_state[ar_state$STUSPS == "AR", ]
+ar_state <- st_transform(ar_state, 5070)
+
 ar_zctas <- zctas(year = 2020, progress_bar = FALSE)
 ar_zctas$zcta <- ar_zctas$ZCTA5CE20
-ar_zctas <- ar_zctas[substr(ar_zctas$zcta, 1, 2) %in% c("71", "72"), ]
 ar_zctas <- st_transform(ar_zctas, 5070)   # EPSG:5070 NAD83 Conus Albers
+ar_centroids <- st_centroid(ar_zctas)
+inside_ar    <- st_intersects(ar_centroids, ar_state, sparse = FALSE)[, 1]
+ar_zctas     <- ar_zctas[inside_ar, ]
 
 zcta_sf <- merge(ar_zctas, pooled_active, by = "zcta", all.x = FALSE)
 
 message("ZCTAs with data (unsuppressed pooled): ", nrow(zcta_sf))
 
 # ---- Spatial weights (adaptive KNN k = 8) -----------------------------------
+# Built BEFORE EB smoothing because local EB needs the neighborhood structure.
 coords <- st_centroid(zcta_sf) |> st_coordinates()
 knn    <- knearneigh(coords, k = KNN_K)
 nb     <- knn2nb(knn, sym = FALSE)
 lw     <- nb2listw(nb, style = "W", zero.policy = TRUE)
+
+# ---- Empirical Bayes smoothing (local, Marshall 1991) -----------------------
+# Raw rates from small-denominator ZCTAs are extremely noisy: a ZCTA with
+# ~70 person-halfyears and 19 DFU produces rate=284/1000 purely from chance.
+# Local EB shrinks each ZCTA's rate toward its NEIGHBORHOOD mean (not the
+# global mean) by an amount proportional to its denominator-driven
+# unreliability. Standard practice for small-area disease mapping
+# (assumptions §9.6 — promoted from sensitivity to primary because raw-rate
+# Gi* is dominated by small-N noise from rural ZCTAs). Local EB is preferred
+# over global EB because it preserves spatial heterogeneity instead of
+# pulling all ZCTAs toward the statewide mean.
+eb_local <- EBlocal(zcta_sf$dfu_person_halfyears,
+                    zcta_sf$dm_person_halfyears, nb)
+zcta_sf$rate_raw <- zcta_sf$rate_per_1000           # keep raw for reference
+zcta_sf$rate_per_1000 <- eb_local$est * 1000        # primary = local EB
 
 # ---- Global Moran's I -------------------------------------------------------
 set.seed(20260405)
@@ -82,6 +121,13 @@ moran_global <- moran.mc(zcta_sf$rate_per_1000, lw,
                          nsim = NPERM, zero.policy = TRUE)
 print(moran_global)
 saveRDS(moran_global, file.path(OUT_DIR, "global_morans_I_pooled.rds"))
+
+# Sensitivity: Moran's I on raw (unsmoothed) rates for the supplement
+set.seed(20260405)
+moran_global_raw <- moran.mc(zcta_sf$rate_raw, lw,
+                             nsim = NPERM, zero.policy = TRUE)
+saveRDS(moran_global_raw,
+        file.path(OUT_DIR, "global_morans_I_pooled_rawrate.rds"))
 
 # ---- Local Getis-Ord Gi* (permutation + FDR) --------------------------------
 set.seed(20260405)

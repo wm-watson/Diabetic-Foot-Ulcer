@@ -3,7 +3,7 @@
 **Purpose:** Running log of every methodological decision made in the R pipeline.
 Every item here must be addressable in the paper's Methods or Limitations section.
 
-Last updated: 2026-04-05 (rev 2: Option C window + tier2_temporal + bin structure)
+Last updated: 2026-04-21 (rev 3: enrollment-based denominator, two-cohort design)
 
 ---
 
@@ -141,14 +141,107 @@ Last updated: 2026-04-05 (rev 2: Option C window + tier2_temporal + bin structur
 
 ## 6. Prevalence Calculation
 
-### 6.1 Denominator
-- Active diabetics per ZCTA-year (§5.1), excluding ambiguous-DM in primary analysis.
+### 6.1 Denominator — enrollment-based, two-cohort design (rev 3, 2026-04-21)
+
+Prior approach (rev 1/2): claims-observed denominator (count of unique
+DM patient_ids with any claim in a bin). Replaced because:
+
+1. **Insurance churn bias.** Patients who lose coverage mid-window drop
+   entirely from the denominator, inflating ZCTA rates in high-churn
+   (rural, Medicaid-heavy) areas. Arkansas Medicaid expansion/QHP churn
+   is substantial.
+2. **Healthy-user invisibility.** Well-managed diabetics with few visits
+   are undercounted relative to high-utilizers, distorting the ZCTA mix
+   in favor of care-seeking populations.
+3. **Payer-transition gaps.** A patient switching Medicaid → Commercial
+   vanishes from bins during the transition, even though they were
+   continuously at risk.
+
+The replacement uses the **Member Enrollment Selection Table (MEST)**,
+which provides a 12-character monthly enrollment flag string per person
+× payer × year, with an APCD-derived `apcd_unique_id` that links the
+same person across carriers.
+
+**Medical payer types included** (can generate medical claims with DX
+codes): COM, MCD, MCR_ADV, QHP, HCIP, EBD, PASSE, MCD_QHP. Excluded
+(no medical DX): DNT, PBM, MCRAdvPhrm, EBD_PBM, EBD_TPA, EBD_RET.
+
+Within a person × year, enrollment is merged by **bitwise OR** across
+medical payer types. A patient with COM Jan–Jun and MCD Jul–Dec is
+credited with 12/12 months.
+
+**Two cohorts are constructed** (see `step3c_enrollment.sas`):
+
+| Cohort | Definition | Role |
+|---|---|---|
+| **Cohort 1 — Continuous (PRIMARY)** | All 72 months of the study window covered, bitwise OR across medical payers. | Main analysis; strongest internal validity. |
+| **Cohort 2 — Fractional (SENSITIVITY)** | Any patient with ≥1 month of medical enrollment anywhere in 2017–2022; contributes `enrolled_months/6` person-halfyears to each bin. | Robustness check; retains churn-exposed populations. |
+
+For Cohort 2, a **per-bin floor of ≥3 of 6 months (50%)** is enforced
+at the analysis stage. Bins with <3 months contribute zero person-time
+to that bin (patient is "more unobserved than observed"), but the
+patient still contributes to other bins where they meet the floor.
+Rationale: below 50%, estimated rates are dominated by unobserved
+exposure time; DFU cases developing in unobserved months produce a
+denominator bias not offset by the numerator. The 50% threshold is
+analogous to HEDIS's 11/12 annual continuous enrollment rule, adapted
+to our 6-month bin structure.
+
+#### Medicare FFS handling
+MEST does not cover Medicare FFS (only Medicare Advantage, payer_type
+MCR_ADV). For FFS beneficiaries we have `APCD_MCR_BEN_SUM` with
+year-level presence only (`bene_enrollmt_ref_yr`). **Assumption:** if a
+`bene_id` has any BEN_SUM record for year Y, the beneficiary is
+credited with 12/12 months of enrollment in year Y. Justification: FFS
+disenrollment mid-year is rare (death or MA switch, either of which
+removes them from further claims in the downstream data). Slightly
+over-counts, but does so uniformly across ZCTAs — not a spatial bias.
+
+#### Identity-resolution (collision) limitation
+The APCD does not have access to Social Security numbers. Identity
+resolution across carriers relies on a probabilistic hash
+(`apcd_unique_id`). Individuals who change insurers may receive a new
+`apcd_unique_id` with no linkage to their old record, appearing as
+distinct patients in both numerator and denominator. In the 1%
+development sample, 92 of 442,613 member_ids (0.02%) exhibited
+inconsistent identity resolution; 26,513 apcd_unique_ids (6.4%) were
+correctly resolved across multiple submitter member_ids. The true
+collision rate is unobservable but likely highest among Medicaid
+expansion enrollees with coverage churn. **Impact:** this slightly
+inflates ZCTA-level denominators in high-churn areas, producing
+*conservative (downward-biased)* prevalence estimates in exactly the
+areas where DFU burden is expected to be highest. Any hot spots
+identified in those areas are therefore robust to this bias.
+
+#### Numerator handling (both cohorts)
+A DFU patient counts as 1 case in the bin where their first
+Tier-2-qualifying service date falls, regardless of total enrolled
+months. The service date itself establishes they were enrolled at that
+moment. Rate = cases / person-time, which is the standard
+epidemiological formulation.
 
 ### 6.2 Numerator
-- Prevalent DFU patients per ZCTA-year meeting Tier 2 (§5.2).
+- Prevalent DFU patients per ZCTA-bin meeting Tier 2 (§5.2).
 
 ### 6.3 Rate
 - **Cases per 1,000 diabetics** (directly age-adjusted only if N permits at ZCTA level — likely not; report crude with age distribution as covariate for Paper 2).
+- **Local Empirical Bayes smoothing (Marshall 1991)** applied to pooled
+  ZCTA rates before Gi*/LISA. Raw rates from small-denominator ZCTAs (some
+  rural ZCTAs have <100 person-halfyears) are dominated by Poisson noise:
+  the raw-rate range was 14–284 per 1,000 with the top decile entirely
+  composed of ZCTAs with 67–350 person-halfyears, generating spurious
+  variance that drowned out the true urban/rural pattern (raw Moran's I =
+  0.036, p = 0.04). Local EB shrinks each ZCTA toward its KNN-8
+  neighborhood mean by an amount proportional to its denominator
+  unreliability, preserving spatial heterogeneity while denoising small-N
+  estimates. Local EB rate range: 18–109 per 1,000; Moran's I = 0.279,
+  p = 0.001. The crude prevalence map (Figure 1) still shows the raw rate
+  for transparency; Gi* and LISA (Figures 2–3) are computed on the
+  EB-smoothed rate.
+- **Why local rather than global EB:** Global EB pulls all ZCTAs toward the
+  statewide mean and over-smooths to the point that no local Gi* clusters
+  survive FDR (tested 2026-04-11). Local EB preserves the gradient that
+  makes hot/cold spot detection meaningful.
 
 ### 6.4 Small-cell suppression (PCD standard)
 - **Numerator threshold:** DFU cases <11 per ZCTA-bin suppressed.
