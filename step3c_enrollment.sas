@@ -56,9 +56,10 @@
 
  Prerequisites
  -------------
- Step 3 (step3_cohort.sas) must have been run — requires dm_cohort_commercial
- and dm_cohort_medicare in WORK, both carrying apcd_unique_id (from MEST for
- commercial, from BEN_SUM for Medicare).
+ Step 5 (step5_zip_extract.sas) must have been run — we load the DM cohort's
+ apcd_unique_id values from the analytic CSV (dm_dfu_analytic.csv) rather
+ than requiring step3's WORK datasets to be in memory. This makes step3c
+ self-contained and runnable in a fresh SAS session.
 
  Outputs (D:\WPWatson)
  ---------------------
@@ -81,9 +82,11 @@ libname mylib 'D:\WPWatson';
 /* Medical payer types (WHERE clause fragment) */
 %let medical_payers = %str('COM','MCD','MCR_ADV','QHP','HCIP','EBD','PASSE','MCD_QHP');
 
-/* Study window */
+/* Study window (year is stored as VARCHAR in MEST, so we pass a list of */
+/* string literals rather than relying on a numeric BETWEEN.)            */
 %let yr_start = 2017;
 %let yr_end   = 2022;
+%let year_list = %str('2017','2018','2019','2020','2021','2022');
 
 
 /* ======================================================================= */
@@ -114,7 +117,9 @@ proc sql;
     select * from connection to odbc (
         select apcd_unique_id,
                gender,
-               year,
+               /* MEST.year is varchar on the server; cast to integer so */
+               /* it unions cleanly with BEN_SUM (bene_enrollmt_ref_yr).  */
+               cast(year as integer) as year,
                max(substring(enrollment_string, 1,  1)) as m01,
                max(substring(enrollment_string, 2,  1)) as m02,
                max(substring(enrollment_string, 3,  1)) as m03,
@@ -129,7 +134,7 @@ proc sql;
                max(substring(enrollment_string, 12, 1)) as m12
         from public.AR_APCD_24B_MEST
         where payer_type in (&medical_payers)
-          and year between &yr_start and &yr_end
+          and year in (&year_list)
           and apcd_unique_id is not null
           and apcd_unique_id <> ''
         group by apcd_unique_id, gender, year
@@ -284,38 +289,58 @@ run;
 
 
 /* ======================================================================= */
-/* PART E: Join to DM cohort (keep only DM patients in the enrollment file) */
+/* PART E: Load DM cohort's apcd_unique_ids from step5's analytic CSV      */
 /* ======================================================================= */
 
 /*
- dm_cohort_commercial and dm_cohort_medicare (from step3) both carry
- apcd_unique_id. A patient in both sources (cross-payer) has a single
- apcd_unique_id and we want a single enrollment row — the MEST/BEN_SUM
- union above already handles this at the apcd_unique_id level.
+ step5_zip_extract.sas produces dm_dfu_analytic.csv, which is the
+ canonical study roster. Each row carries study_id = apcd_unique_id ||
+ gender (no separator). We strip the trailing M/F/U character to recover
+ apcd_unique_id.
+
+ Reading from the CSV (rather than depending on step3's WORK datasets)
+ makes step3c self-contained -- it can be run in a fresh SAS session
+ after step5 has been run once.
 */
 
+proc import
+    datafile="&outdir.\dm_dfu_analytic.csv"
+    out=work._analytic_raw
+    dbms=csv
+    replace;
+    getnames=yes;
+    guessingrows=max;
+run;
+
+data work.dm_study_ids;
+    length apcd_unique_id $90 diabetes_type $10 primary_source $10;
+    set work._analytic_raw;
+
+    /* study_id is apcd_unique_id concatenated with gender M/F/U.        */
+    /* Strip the trailing single character to recover apcd_unique_id.    */
+    if missing(study_id) or length(study_id) < 2 then apcd_unique_id = '';
+    else apcd_unique_id = substr(study_id, 1, length(study_id) - 1);
+
+    primary_source = upcase(data_source);
+
+    keep apcd_unique_id diabetes_type first_dm_date primary_source;
+    where study_id is not null and study_id <> '';
+run;
+
+/* Deduplicate — one row per apcd_unique_id (cross-payer dedup already */
+/* applied upstream; this is a safety net).                            */
 proc sql;
     create table work.dm_study_ids as
-    select distinct
-        coalescec(apcd_unique_id, '') as apcd_unique_id length=90,
-        max(diabetes_type) as diabetes_type length=10,
-        min(first_dm_date) as first_dm_date format=mmddyy10.,
-        'COMMERCIAL' as primary_source length=10
-    from dm_cohort_commercial
-    where apcd_unique_id is not null and apcd_unique_id <> ''
-    group by apcd_unique_id
-
-    union
-
-    select distinct
-        coalescec(apcd_unique_id, '') as apcd_unique_id length=90,
-        max(diabetes_type) as diabetes_type length=10,
-        min(first_dm_date) as first_dm_date format=mmddyy10.,
-        'MEDICARE' as primary_source length=10
-    from dm_cohort_medicare
-    where apcd_unique_id is not null and apcd_unique_id <> ''
+    select apcd_unique_id,
+           max(diabetes_type) as diabetes_type length=10,
+           min(first_dm_date) as first_dm_date format=mmddyy10.,
+           max(primary_source) as primary_source length=10
+    from work.dm_study_ids
+    where apcd_unique_id <> ''
     group by apcd_unique_id;
 quit;
+
+%put NOTE: E-1a Loaded DM cohort from dm_dfu_analytic.csv.;
 
 proc sql;
     create table work.dm_enrollment as
