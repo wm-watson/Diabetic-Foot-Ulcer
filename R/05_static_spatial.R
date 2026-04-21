@@ -120,14 +120,16 @@ set.seed(20260405)
 moran_global <- moran.mc(zcta_sf$rate_per_1000, lw,
                          nsim = NPERM, zero.policy = TRUE)
 print(moran_global)
-saveRDS(moran_global, file.path(OUT_DIR, "global_morans_I_pooled.rds"))
+saveRDS(moran_global, file.path(OUT_DIR,
+        sprintf("global_morans_I_pooled_%s.rds", COHORT)))
 
 # Sensitivity: Moran's I on raw (unsmoothed) rates for the supplement
 set.seed(20260405)
 moran_global_raw <- moran.mc(zcta_sf$rate_raw, lw,
                              nsim = NPERM, zero.policy = TRUE)
 saveRDS(moran_global_raw,
-        file.path(OUT_DIR, "global_morans_I_pooled_rawrate.rds"))
+        file.path(OUT_DIR,
+                  sprintf("global_morans_I_pooled_rawrate_%s.rds", COHORT)))
 
 # ---- Local Getis-Ord Gi* (permutation + FDR) --------------------------------
 set.seed(20260405)
@@ -154,7 +156,8 @@ zcta_sf$gi_bin <- factor(zcta_sf$gi_bin, levels = c(
     "Hot 90%", "Hot 95%", "Hot 99%"
 ))
 
-saveRDS(zcta_sf, file.path(OUT_DIR, "zcta_sf_gi_pooled.rds"))
+saveRDS(zcta_sf, file.path(OUT_DIR,
+        sprintf("zcta_sf_gi_pooled_%s.rds", COHORT)))
 
 # ---- LISA (Local Moran's I) sensitivity -------------------------------------
 set.seed(20260405)
@@ -174,7 +177,8 @@ zcta_sf$lisa_quad <- with(as.data.frame(zcta_sf), fcase(
     rate_per_1000 >= mean_rate & lagged <  mean_rate, "High-Low",
     rate_per_1000 <  mean_rate & lagged >= mean_rate, "Low-High"
 ))
-saveRDS(zcta_sf, file.path(OUT_DIR, "zcta_sf_lisa_pooled.rds"))
+saveRDS(zcta_sf, file.path(OUT_DIR,
+        sprintf("zcta_sf_lisa_pooled_%s.rds", COHORT)))
 
 # ---- Maps -------------------------------------------------------------------
 theme_map <- theme_void(base_size = 11) +
@@ -188,7 +192,7 @@ p_rate <- ggplot(zcta_sf) +
     labs(title = "Crude DFU prevalence, AR ZCTAs, 2017-2022 (pooled)",
          caption = "Tier 2 primary; ambiguous-DM excluded; cells with <11 cases or <20 DM suppressed") +
     theme_map
-ggsave(file.path(OUT_DIR, "map_rate_pooled.png"),
+ggsave(file.path(OUT_DIR, sprintf("map_rate_pooled_%s.png", COHORT)),
        p_rate, width = 8, height = 7, dpi = 300)
 
 # Gi* significance bins
@@ -203,7 +207,7 @@ p_gi <- ggplot(zcta_sf) +
     labs(title = "Local Getis-Ord Gi* hotspot analysis, AR DFU 2017-2022",
          caption = "Adaptive KNN k=8; 999 permutations; BH-FDR q<0.05") +
     theme_map
-ggsave(file.path(OUT_DIR, "map_gi_pooled.png"),
+ggsave(file.path(OUT_DIR, sprintf("map_gi_pooled_%s.png", COHORT)),
        p_gi, width = 8, height = 7, dpi = 300)
 
 # LISA quadrants
@@ -216,7 +220,7 @@ p_lisa <- ggplot(zcta_sf) +
     labs(title = "Local Moran's I (LISA), AR DFU 2017-2022 (sensitivity)",
          caption = "Adaptive KNN k=8; 999 permutations; BH-FDR q<0.05") +
     theme_map
-ggsave(file.path(OUT_DIR, "map_lisa_pooled.png"),
+ggsave(file.path(OUT_DIR, sprintf("map_lisa_pooled_%s.png", COHORT)),
        p_lisa, width = 8, height = 7, dpi = 300)
 
 message("\n05_static_spatial.R complete.")

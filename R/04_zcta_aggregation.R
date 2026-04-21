@@ -61,8 +61,16 @@ OUT_DIR     <- file.path(DROPBOX_DIR, "outputs", "panels")
 dir_create(OUT_DIR)
 
 TIER_RDS         <- file.path(ANALYTIC, "02_tiered.rds")
-ENROLL_CONT_CSV  <- file.path(DROPBOX_DIR, "cohort_continuous.csv")
-ENROLL_FRAC_CSV  <- file.path(DROPBOX_DIR, "cohort_fractional.csv")
+
+# Enrollment cohort CSVs (from step3c_enrollment.sas). These live in a
+# separate Dropbox location alongside other APCD-derived analytic
+# datasets -- override via DFU_ENROLL_DIR if moved.
+ENROLL_DIR       <- Sys.getenv(
+    "DFU_ENROLL_DIR",
+    "/Users/williamwatson/Library/CloudStorage/Dropbox/APCD/Analytical Datasets"
+)
+ENROLL_CONT_CSV  <- file.path(ENROLL_DIR, "cohort_continuous.csv")
+ENROLL_FRAC_CSV  <- file.path(ENROLL_DIR, "cohort_fractional.csv")
 
 # ---- Parameters -------------------------------------------------------------
 STUDY_YEARS  <- 2017:2022
