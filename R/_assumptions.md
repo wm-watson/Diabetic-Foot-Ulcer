@@ -92,6 +92,49 @@ Last updated: 2026-04-21 (rev 3: enrollment-based denominator, two-cohort design
 - TIGER/Line 2020 national ZCTAs via `tigris` package, filtered to AR ZCTAs present in our cohort.
 - S2 geometry disabled (`sf_use_s2(FALSE)`) to avoid degenerate-edge errors after state clipping.
 
+### 4.4 Memphis edge effect (rev 3, 2026-04-21)
+Five counties in eastern Arkansas lie within roughly 30 miles of
+Memphis, Tennessee: **Crittenden, Mississippi, Phillips, Lee, and
+St. Francis**. Residents of these counties have appreciably lower
+coded DFU and amputation rates in our data than their clinical
+profile (high poverty, high T2D prevalence, documented elsewhere as
+a high-burden zone) would predict. Raw amputation rate per 1,000
+DM person-halfyears is 0.66 in this region versus 0.85 in
+Delta-Interior. The depression is driven by the following payer
+mechanisms that bypass the AR APCD:
+
+1. **TN-based commercial insurance via Memphis employment.** Many
+   border-county residents work in Memphis (FedEx, St. Jude,
+   Methodist Le Bonheur, Regional One, municipal/county government).
+   Employer-sponsored insurance from TN-licensed carriers (TN BCBS,
+   Cigna-TN, United-TN) does not flow to the AR APCD even when the
+   insured resides in Arkansas.
+2. **TN-licensed Medicare Advantage plans** purchased by AR
+   residents through Memphis brokers.
+3. **Memphis VA utilization.** Veterans using the Memphis VA Medical
+   Center generate federal VA claims that are not in the AR APCD.
+4. **Self-pay / charity care** at Memphis safety-net providers
+   (Regional One).
+
+Mechanisms that **do not** contribute to the edge effect (common
+misconceptions):
+- Tennessee Medicaid / TennCare — Medicaid is state-residency-based;
+  an AR resident cannot be on TN Medicaid. AR Medicaid claims for
+  out-of-state care do flow to the AR APCD.
+- AR-licensed commercial insurance covering care at Memphis providers
+  — these claims flow to the APCD regardless of where care is
+  delivered.
+- Medicare FFS at Memphis providers — CMS-reported and included.
+
+**Analytic handling:**
+- Flag the five counties as potentially undercaptured in the main
+  analysis (limitation in paper).
+- Sensitivity analysis: exclude those counties and re-run the spatial
+  analysis. If hot spots elsewhere are stable after exclusion, the
+  rest of the map is robust.
+- Consider a Memphis-distance covariate in the spatial regression
+  (Paper 2).
+
 ---
 
 ## 5. Time Aggregation
