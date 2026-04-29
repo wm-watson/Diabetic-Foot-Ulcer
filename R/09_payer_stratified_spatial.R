@@ -67,10 +67,20 @@ dir_create(OUT_DIR)
 
 COHORT  <- Sys.getenv("DFU_COHORT", "continuous")
 STRATUM <- toupper(Sys.getenv("DFU_PAYER_STRATUM", "MEDICARE"))
-OUTCOME <- tolower(Sys.getenv("DFU_OUTCOME", "dfu"))   # "dfu" or "amp"
+OUTCOME <- tolower(Sys.getenv("DFU_OUTCOME", "dfu"))
+# OUTCOME values:
+#   "dfu"     = DFU prevalence among DM (numerator: first DFU; denominator: DM PHY)
+#   "amp"     = amputation incidence among DM (numerator: first amp; denom: DM PHY)
+#   "amp_dfu" = conditional amp among Tier 2 DFU (numerator: first amp among DFU;
+#               denominator: DFU person-halfyears, restricted to Tier 2)
+#
+# The amp_dfu outcome is the payer-stratified counterpart of script 08
+# (conditional amputation analysis). It uses a smaller, restricted cohort
+# (Tier 2 DFU only); Medicaid and Commercial strata may be too sparse for
+# stable spatial estimates and the script will warn if <30 ZCTAs remain.
 
 stopifnot(STRATUM %in% c("MEDICARE", "MEDICAID", "COMMERCIAL", "MIXED"))
-stopifnot(OUTCOME %in% c("dfu", "amp"))
+stopifnot(OUTCOME %in% c("dfu", "amp", "amp_dfu"))
 message("Cohort:   ", COHORT)
 message("Stratum:  ", STRATUM)
 message("Outcome:  ", OUTCOME)
@@ -80,7 +90,9 @@ STUDY_YEARS <- 2017:2022
 KNN_K       <- 8L
 NPERM       <- 999L
 FDR_ALPHA   <- 0.05
-DEN_THRESH  <- 20L
+# Looser denominator floor for amp_dfu since DFU person-halfyears are
+# inherently smaller (~10K Tier 2 patients vs ~190K all-DM continuous).
+DEN_THRESH  <- if (OUTCOME == "amp_dfu") 5L else 20L
 BIN_MONTH_FLOOR <- 3L
 BIN_COLS <- c("m_h1_2017","m_h2_2017","m_h1_2018","m_h2_2018",
               "m_h1_2019","m_h2_2019","m_h1_2020","m_h2_2020",
@@ -118,6 +130,16 @@ pt[, first_dfu_date := as.Date(first_dfu_date)]
 
 pt_strat <- pt[apcd_unique_id %in% strata_ids]
 
+# For amp_dfu (conditional amputation): restrict to Tier 2 DFU patients.
+# The "denominator" reported in this analysis is DFU person-halfyears,
+# not DM person-halfyears, since rate = amp / DFU-PHY.
+if (OUTCOME == "amp_dfu") {
+    pt_strat    <- pt_strat[tier2 == 1L]
+    cohort_strat <- cohort_strat[apcd_unique_id %in% pt_strat$apcd_unique_id]
+    message("Tier 2 DFU + stratum + cohort intersection: ",
+            nrow(cohort_strat))
+}
+
 # ---- Build denominator (DM person-halfyears, this stratum + cohort) --------
 zcta_lookup <- unique(pt_strat[, .(
     apcd_unique_id, zcta,
@@ -146,7 +168,10 @@ if (COHORT == "continuous") {
 den <- long[, .(dm_person_halfyears = sum(contrib)), by = .(zcta, bin_id)]
 
 # ---- Build numerator --------------------------------------------------------
-if (OUTCOME == "amp") {
+if (OUTCOME %in% c("amp", "amp_dfu")) {
+    # First amputation in bin. For amp_dfu, pt_strat is already restricted
+    # to Tier 2 DFU patients (above), so this naturally gives "first amp
+    # among DFU patients."
     pt_event <- pt_strat[!is.na(first_amp_date) &
                          first_amp_date >= as.Date("2017-01-01") &
                          first_amp_date <= as.Date("2022-12-31")]
@@ -268,10 +293,16 @@ theme_map <- theme_void(base_size = 12) +
           plot.caption  = element_text(color = "grey40", size = 9),
           legend.position = "right")
 
-outcome_label <- ifelse(OUTCOME == "amp",
-                        "Amputation incidence",
-                        "DFU prevalence")
-n_label <- format(length(strata_ids), big.mark = ",")
+outcome_label <- switch(OUTCOME,
+    "amp"     = "Amputation incidence",
+    "amp_dfu" = "DFU → amputation progression",
+    "dfu"     = "DFU prevalence")
+n_label <- if (OUTCOME == "amp_dfu") {
+    sprintf("%s (Tier 2 DFU only)",
+            format(nrow(cohort_strat), big.mark = ","))
+} else {
+    format(length(strata_ids), big.mark = ",")
+}
 
 p_rate <- ggplot() +
     geom_sf(data = ar_zctas, fill = "grey93", color = "grey85",
