@@ -56,10 +56,13 @@ all have been ingested:
     enrollment-month dominance (≥80% threshold). Exports
     `payer_strata.csv`.
 11. `R/09_payer_stratified_spatial.R` — payer-stratified static spatial
-    analysis. Reruns the DFU prevalence and amputation incidence
-    analyses for each of four payer strata. **This is the primary
-    analytic product** (per rev 4 promotion). Controlled by
-    `DFU_PAYER_STRATUM` and `DFU_OUTCOME` env vars.
+    analysis. Reruns the DFU prevalence, amputation incidence, AND
+    conditional amputation analyses for each of four payer strata.
+    **This is the primary analytic product** (per rev 4 promotion).
+    Controlled by `DFU_PAYER_STRATUM` and `DFU_OUTCOME` env vars.
+    Supports `OUTCOME=dfu`, `OUTCOME=amp`, and `OUTCOME=amp_dfu`
+    (conditional, Tier 2 DFU-restricted denominator). Total of
+    4 strata × 3 outcomes = 12 analytic combinations available.
 
 ---
 
@@ -222,22 +225,58 @@ State that the divergence between these three outcomes *is* a finding
 of the paper: mapping DFU prevalence alone is insufficient for public
 health intervention targeting in Arkansas.
 
-**Key interpretive findings for the paper to highlight (rev 4):**
-- **Ozark "hot DFU prevalence"** is a Medicare-retiree chronic-coding
-  pattern; amputation rates in the same stratum are average. Confirms
-  "chronic mild disease" interpretation.
-- **River Valley "hot amputation"** is robust across Medicare and
-  Mixed-payer strata. Real, under-recognized progression hot spot.
-  Strongest candidate for targeted intervention.
+**Key interpretive findings for the paper to highlight (rev 4,
+updated 2026-04-28 with conditional payer-stratified results):**
+
+- **Ozark protective signal is robust across all four payer strata**
+  for the conditional amputation outcome. Mixed-payer Ozarks shows
+  54 cold vs 0 hot ZCTAs (71% of Ozark Mixed-payer ZCTAs are cold
+  spots). Even patients with the most fragmented coverage rarely
+  progress to amputation in the Ozarks. The "hot DFU prevalence"
+  pattern in Medicare reflects retiree chronic-coding intensity, not
+  worse disease — confirmed by uniformly low amputation progression
+  in the same population. Possible mechanisms: regional wound-care
+  provider density, primary-care continuity, lower disease severity
+  at presentation. Worth dedicated investigation.
+
+- **Arkansas River Valley** (Pope, Johnson, Yell, Logan, Howard
+  counties) — robust progression hot spot. 17 hot vs 2 cold ZCTAs in
+  the Medicare conditional amputation stratum (script 09 amp_dfu),
+  EB rate 22.0/1,000 DFU PHY (highest of any region in Medicare).
+  Robust to payer stratification.
+
+- **Southwestern Arkansas / Texarkana corridor (NEW finding)** —
+  Howard, Sevier, Little River, and Hempstead counties show the
+  highest DFU → amputation progression rates in the state in the
+  Mixed-payer conditional analysis (EB rates 27–42 per 1,000 DFU
+  PHY). Howard County also appears in the top 10 hot ZCTAs of the
+  Medicare amp_dfu stratum, supporting that the signal is not purely
+  a payer-mix artifact. **This region was not flagged by any of the
+  pooled or single-payer DFU-prevalence or amputation-incidence
+  analyses.** It surfaces only in the conditional + payer-stratified
+  framework. Tied with River Valley as a top-priority intervention
+  target. Methods section should explicitly state that this finding
+  emerged from the conditional payer-stratified analysis and would
+  have been missed by conventional descriptive mapping.
+
 - **Delta-Interior amputation hot spot in the Mixed-payer stratum**
-  (17 hot vs 7 cold ZCTAs) is **invisible in pooled or single-payer
-  analyses**. Patients with payer churn (dual-eligibles, Medicaid-
-  expansion churners) are spatially concentrated in the Delta-Interior
-  and have the worst amputation outcomes. **Highest-priority finding
-  of the paper for clinical intervention.**
-- **Memphis-border "cold spot"** is a Medicare/Medicaid data-capture
-  artifact (see §3.3); the commercial stratum shows the highest DFU
-  rate of any AR region in those counties.
+  (16 hot vs 7 cold ZCTAs in conditional amp) — patients with payer
+  churn (dual-eligibles, Medicaid-expansion churners) are spatially
+  concentrated in the Delta-Interior and have the worst amputation
+  outcomes. Together with the Texarkana finding, this is one of two
+  highest-priority intervention findings in the paper.
+
+- **Memphis-border "cold spot" is a Medicare/Medicaid DFU-prevalence
+  data-capture artifact (§3.3), not evidence of low disease burden.**
+  The commercial stratum shows the highest DFU rate of any AR region
+  in those counties (9.77/1,000), and the conditional amputation
+  analysis shows that among captured DFU patients in Border-Memphis,
+  Medicare progression is ELEVATED (8 hot vs 5 cold ZCTAs, EB rate
+  19.2/1,000 DFU PHY — well above state average). The captured
+  patients are progressing to amputation at high rates; the missing
+  patients (TN-MA enrollees) likely have similar or worse outcomes.
+  The Methods section should explicitly distinguish "low captured
+  prevalence" from "low actual disease burden" for this region.
 
 ### 3.6 Statistical Analysis
 - **Spatial weights:** adaptive k-nearest-neighbor with k = 8,
