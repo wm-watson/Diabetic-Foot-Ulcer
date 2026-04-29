@@ -92,32 +92,51 @@ Last updated: 2026-04-21 (rev 3: enrollment-based denominator, two-cohort design
 - TIGER/Line 2020 national ZCTAs via `tigris` package, filtered to AR ZCTAs present in our cohort.
 - S2 geometry disabled (`sf_use_s2(FALSE)`) to avoid degenerate-edge errors after state clipping.
 
-### 4.4 Memphis edge effect (rev 3, 2026-04-21)
+### 4.4 Memphis edge effect (rev 4, 2026-04-28 — mechanism corrected)
+
 Five counties in eastern Arkansas lie within roughly 30 miles of
 Memphis, Tennessee: **Crittenden, Mississippi, Phillips, Lee, and
 St. Francis**. Residents of these counties have appreciably lower
 coded DFU and amputation rates in our data than their clinical
-profile (high poverty, high T2D prevalence, documented elsewhere as
-a high-burden zone) would predict. Raw amputation rate per 1,000
-DM person-halfyears is 0.66 in this region versus 0.85 in
-Delta-Interior. The depression is driven by the following payer
-mechanisms that bypass the AR APCD:
+profile would predict.
 
-1. **TN-based commercial insurance via Memphis employment.** Many
-   border-county residents work in Memphis (FedEx, St. Jude,
-   Methodist Le Bonheur, Regional One, municipal/county government).
-   Employer-sponsored insurance from TN-licensed carriers (TN BCBS,
-   Cigna-TN, United-TN) does not flow to the AR APCD even when the
-   insured resides in Arkansas.
-2. **TN-licensed Medicare Advantage plans** purchased by AR
-   residents through Memphis brokers.
-3. **Memphis VA utilization.** Veterans using the Memphis VA Medical
-   Center generate federal VA claims that are not in the AR APCD.
-4. **Self-pay / charity care** at Memphis safety-net providers
-   (Regional One).
+**Initial hypothesis (rev 3) — partially incorrect.** I previously
+attributed the cold spot primarily to TN-licensed commercial
+insurance carried by Memphis-employed AR residents. The
+payer-stratified analysis (script 09, run 2026-04-28) refutes this:
+**Border-Memphis has the HIGHEST commercial-stratum DFU rate of any
+AR region (9.77 per 1,000) and ZERO commercial cold-spot ZCTAs.**
+The cold spot is not a commercial-insurance artifact.
 
-Mechanisms that **do not** contribute to the edge effect (common
-misconceptions):
+**Revised mechanism (rev 4):** the Border-Memphis cold spot is a
+**Medicare and Medicaid signal**:
+
+| Stratum | Cold ZCTAs in Border-Memphis | Mean DFU rate |
+|---|---|---|
+| Medicare | 33 | 6.30 |
+| Medicaid | 11 | 4.93 |
+| Mixed-payer | 16 | 7.12 |
+| **Commercial** | **0** | **9.77** (highest of regions) |
+
+The dominant capture mechanism is therefore most likely
+**TN-licensed Medicare Advantage plans** in which AR border residents
+are enrolled but which do not report to the AR APCD. The Member
+Enrollment Selection Table (MEST) only captures AR-licensed payer
+products. CMS-reported Medicare FFS *is* fully captured; AR-licensed
+Medicare Advantage *is* captured; **Memphis-area TN-licensed Medicare
+Advantage plans (Humana TN, BCBS-TN MA, Cigna TN MA) are not
+captured**, and Memphis brokers actively sell these plans into AR
+border counties.
+
+Secondary mechanisms (smaller contribution):
+- **Memphis VA utilization** — dual-eligible veterans use Memphis VA
+  for some care; those federal-VA claims are absent from the APCD.
+- **Self-pay / charity care** at Memphis safety-net providers
+  (Regional One).
+- Some commercial leakage may persist for AR residents on small TN
+  group plans, but the data show this is a minor contributor.
+
+Mechanisms that **do not** contribute to the edge effect:
 - Tennessee Medicaid / TennCare — Medicaid is state-residency-based;
   an AR resident cannot be on TN Medicaid. AR Medicaid claims for
   out-of-state care do flow to the AR APCD.
@@ -126,14 +145,24 @@ misconceptions):
   delivered.
 - Medicare FFS at Memphis providers — CMS-reported and included.
 
+**Why the commercial stratum looks "normal" in Border-Memphis:** the
+small AR-licensed commercial population we *do* capture there is a
+selected subset (older, more stable employees on AR-licensed plans;
+the high-mobility working-age commuters on TN plans are invisible).
+The captured commercial subset has high DFU rates because it is an
+older / sicker subgroup, not because the region is well-covered.
+
 **Analytic handling:**
-- Flag the five counties as potentially undercaptured in the main
-  analysis (limitation in paper).
+- Flag the five counties as undercaptured in the main analysis.
 - Sensitivity analysis: exclude those counties and re-run the spatial
   analysis. If hot spots elsewhere are stable after exclusion, the
   rest of the map is robust.
-- Consider a Memphis-distance covariate in the spatial regression
-  (Paper 2).
+- The corrected mechanism implies that the appropriate adjustment
+  approach (Paper 2) is a **TN-MA enrollment proxy** (e.g., per-county
+  estimates of TN-MA penetration from CMS Medicare Advantage / Part D
+  Contract Enrollment files), not a LODES commuter correction. LODES
+  remains useful as a secondary covariate but is no longer the
+  primary mechanism we are correcting for.
 
 ---
 
@@ -398,50 +427,144 @@ analyses, each on the same enrollment-weighted denominators:
   coded DFU. This is the cleanest measure of healthcare-access failure
   given recognized disease.
 
-**Interpretive pattern from the continuous cohort (2026-04-21):**
+**Interpretive pattern from the continuous cohort (rev 4, 2026-04-28):**
 The three maps diverge meaningfully, and the divergence *is* the
 finding:
 - **Ozarks** — Hot on 05 (most coded DFU), Cold on 07 (low amputation
   incidence), Strongly Cold on 08 (rarely progress to amputation).
   Interpretation: **chronic mild DFU in retiree populations with
-  stable primary care**.
+  stable primary care**. Confirmed in the Medicare stratum
+  (script 09): 59 hot ZCTAs for DFU prevalence in Medicare alone,
+  but only 22 hot for amputation in the same stratum.
 - **Delta-Interior** — Normal on 05 (11.1/1000, at state average), Hot
-  on 07 (0.85/1000, elevated amputation), Normal on 08.
-  Interpretation: **true elevated disease burden; progression rate
-  average but baseline burden drives amputation totals**.
-- **Delta-Border-Memphis** — Artifactually Cold on 05 and 07 (Memphis
-  edge undercapture, §4.4), but has some Hot ZCTAs on 08.
-  Interpretation: among the DFU patients we *do* capture there,
-  progression rates are elevated. Real severity exists; overall
-  numbers depressed by data capture gaps.
+  on 07 (0.85/1000, elevated amputation), Normal on 08 in the pooled
+  view but **strongly hot in the Mixed-payer stratum** (17 hot vs 7
+  cold ZCTAs). Mixed-payer = patients with payer churn (dual-
+  eligibles, Medicaid expansion churners). Interpretation: **the
+  patients with the most fragmented insurance have the worst
+  amputation outcomes, and they are spatially concentrated in the
+  Delta-Interior**. This is the highest-priority finding for
+  intervention — pooled or single-payer analysis hides it; only
+  payer-stratified analysis surfaces it.
+- **Delta-Border-Memphis** — Artifactually Cold on 05 and 07. Driven
+  by Medicare/Medicaid undercapture (§4.4), not commercial — the
+  payer-stratified data show 0 cold ZCTAs in the commercial stratum
+  for this region (highest rate of any region at 9.77/1,000). Real
+  disease severity in Border-Memphis cannot be estimated from APCD
+  alone given the TN-Medicare-Advantage capture gap.
 - **Arkansas River Valley (Pope, Johnson, Yell, Logan, Howard
   counties)** — Moderate on 05, Moderately Hot on 07, **Strongly Hot
   on 08**. Interpretation: **under-recognized progression hot spot**.
   DFU patients in this region progress to amputation at markedly
-  higher rates than elsewhere. This finding emerges only with the
-  conditional analysis and would be missed by DFU-prevalence mapping
-  alone. **Strongest candidate for targeted intervention based on
-  this analysis.**
+  higher rates than elsewhere. **Robust to payer stratification:**
+  20 hot vs 4 cold ZCTAs in Medicare-amp stratum and 16 hot vs 0 cold
+  in Mixed-amp stratum confirm this is not a payer artifact. Strongest
+  candidate for targeted intervention based on this analysis.
 
-**Global Moran's I values** (continuous cohort):
-- Script 05 (DFU prevalence):         0.18
-- Script 07 (amputation incidence):   0.30
-- Script 08 (amp given DFU):          **0.44** (strongest spatial signal)
+**Global Moran's I values:**
 
-The increase from 05 → 08 reflects removal of coding-intensity noise
-and isolation of the genuine progression/access gradient.
+| Outcome | Pooled | Medicare | Medicaid | Commercial | Mixed |
+|---|---|---|---|---|---|
+| DFU prevalence | 0.18 | **0.72** | 0.47 | 0.42 | 0.59 |
+| Amputation incidence | 0.30 | 0.35 | 0.44 | 0.35 | 0.42 |
+| Amp given DFU (08) | 0.44 | — | — | — | — |
+
+**Pooled values systematically understate the spatial pattern**
+because they average across payer-specific patterns that point in
+different directions. The payer-stratified Moran's I values (script
+09) are the more accurate description of the underlying spatial
+structure. This motivates the promotion of payer stratification from
+sensitivity to primary methodology (§8.6).
+
+### 8.6 Payer-stratified analysis (rev 4, 2026-04-28 — promoted to primary)
+
+The pooled (cross-payer) spatial analysis attenuates real spatial
+signal because it averages across payer-specific gradients that point
+in different directions. Pooled DFU-prevalence Moran's I = 0.18; the
+same outcome stratified by Medicare alone gives Moran's I = 0.72.
+The payer-stratified analysis is therefore promoted from a sensitivity
+analysis (§9 in earlier revisions) to a **primary methodology** in
+the paper.
+
+**Stratification scheme** (`sas/step3d_payer_strata.sas`):
+each patient's enrollment-month totals across 2017–2022 are computed
+from the MEST + BEN_SUM:
+- `months_medicare`   = months with MCR_ADV or BEN_SUM-FFS coverage
+- `months_medicaid`   = months with MCD / MCD_QHP / HCIP / PASSE
+- `months_commercial` = months with COM / QHP-non-MCD / EBD
+
+A patient is assigned to the stratum with ≥80% of total months in
+that payer category; otherwise they are classified as **MIXED**.
+Stratum sizes from the fractional cohort (full enrollment population):
+
+| Stratum | N patients |
+|---|---|
+| MEDICARE | 154,651 |
+| MIXED | 108,057 |
+| MEDICAID | 25,510 |
+| COMMERCIAL | 24,959 |
+
+**Interpretive value:**
+- **Medicare stratum** — most reliable signal for DFU coding intensity
+  and chronic management; reflects retiree primary-care patterns.
+  Strongest Moran's I (0.72 for DFU prevalence) because the population
+  is large (N=154,651) and care-utilization is consistent.
+- **Medicaid stratum** — captures the working-poor and disabled
+  populations with eligibility-based coverage. Smaller N (25,510) but
+  represents the highest-poverty subset of AR diabetics.
+- **Commercial stratum** — younger, employed, generally healthier
+  population. Smallest amputation signal because amputation is rare
+  in working-age commercial insureds. Notable use: serves as the
+  **diagnostic check on the Memphis edge mechanism** — Border-Memphis
+  has the highest commercial DFU rate of any region (9.77/1,000) and
+  zero commercial cold-spot ZCTAs, refuting the earlier hypothesis
+  that the cold spot was a TN-employer-commercial-insurance artifact.
+- **Mixed-payer stratum** — patients with payer churn (commonly dual-
+  eligible, Medicaid-expansion churn, or Medicare-MA transitions). This
+  is the **clinically highest-risk stratum** and reveals signal that
+  pooled analysis hides — notably the Delta-Interior amputation hot
+  spot (17 hot vs 7 cold ZCTAs), which is invisible in single-payer
+  strata.
+
+**The Mixed-payer Delta-Interior amputation finding is the most
+clinically important result of the analysis.** Patients with
+fragmented insurance coverage are spatially concentrated in the
+Delta-Interior and have the highest amputation incidence. This is
+exactly the population public health intervention should target, and
+it is the population that pooled descriptive analyses systematically
+miss.
+
+**Recommended figure structure for paper:**
+- Figure 1 (pooled, all three outcomes) — descriptive, sets the
+  baseline.
+- Figure 2 (Medicare-stratified, all three outcomes) — the dominant
+  payer; cleanest signal.
+- Figure 3 (Mixed-payer, amputation only) — the clinically most
+  important finding.
+- Supplementary (Medicaid and Commercial strata) — complete the
+  picture; demonstrate that the cold-spot pattern in Border-Memphis
+  is Medicare/Medicaid-driven, not commercial.
+
+**Statistical handling of small/sparse strata** (Medicaid and
+Commercial amputation): script 09 falls back from Local EB to raw
+rate when EB produces NA in zero-event neighborhoods. Affected ZCTAs
+are recorded in the script log and noted in the figure caption.
 
 ---
 
 ## 9. Sensitivity Analyses Planned
 
+**Note (rev 4, 2026-04-28):** The payer-stratified analysis previously
+listed here as a sensitivity has been promoted to primary methodology
+(§8.6). It is no longer a sensitivity.
+
 1. Include ambiguous-DM (§2.3) in Tiers 1 and 2 → re-run Gi* and EHSA, compare hot spot stability.
 2. Tier 1 and Tier 3 comparison to Tier 2 primary — map concordance and Moran's I comparison.
 3. Stricter Tier 2b: `first_debride_date` within 365 days of `first_dfu_date` (§3.4).
-4. 2017–2022 restricted window for direct commercial/Medicare comparability.
+4. 2017–2022 restricted window for direct commercial/Medicare comparability (subsumed by §8.6 since the payer-stratified analysis already separates them).
 5. Alternative spatial weights (queen contiguity with island-fill vs KNN k=6 vs k=10).
 6. Empirical Bayes smoothing of raw rates vs raw rates for visual comparison.
-7. **Fractional cohort sensitivity** (§6.1) — rerun scripts 05/07/08 with
+7. **Fractional cohort sensitivity** (§6.1) — rerun scripts 05/07/08/09 with
    `DFU_COHORT=fractional` to verify hot spot locations are stable across
    the continuous-enrollment inclusion criterion.
 8. **Memphis-border exclusion sensitivity** (§4.4) — rerun all three
@@ -453,19 +576,22 @@ and isolation of the genuine progression/access gradient.
 ### 9.1 MNAR adjustment options for Memphis edge (deferred — Paper 2)
 The Memphis-border undercapture (§4.4) is formally Missing Not At
 Random — missingness is correlated with both location (distance to
-Memphis) and outcome (working-age adults with DFU who use Memphis
-care). Candidate adjustment strategies, ranked by rigor:
+Memphis) and outcome. The payer-stratified analysis (§8.6) refined
+the mechanism: the cold spot is **Medicare/Medicaid-driven, not
+commercial**. Candidate adjustment strategies, in light of the
+corrected mechanism:
 
-- **Option A — Exclusion sensitivity** (planned, §9.#8): primary
-  robustness check, simplest defense.
-- **Option B — LODES commuter-based correction:** use Census LEHD
-  Origin-Destination employment data to compute, per AR ZCTA, the
-  fraction of workers employed in Shelby County TN. Use as
-  multiplicative correction factor for observed rates under the
-  assumption that TN-employed AR residents carry TN-licensed
-  commercial insurance (invisible to AR APCD).
-- **Option C — Spatial regression with distance-to-Memphis and/or
-  p_TN_commute covariates:** formal adjustment in the Paper 2 panel
+- **Option A — Exclusion sensitivity** (planned, §9 #8): primary
+  robustness check; simplest defense.
+- **Option B — TN-Medicare-Advantage penetration correction (NEW,
+  rev 4):** use CMS Medicare Advantage / Part D Contract Enrollment
+  files (publicly available) to compute, per AR ZCTA, the fraction of
+  Medicare beneficiaries enrolled in TN-licensed MA plans. Apply as
+  multiplicative correction to the Medicare-stratum denominator.
+  This replaces Option B in rev 3 (LODES commuter correction), which
+  targeted the wrong mechanism.
+- **Option C — Spatial regression with distance-to-Memphis and TN-MA
+  penetration as covariates:** formal adjustment in the Paper 2 panel
   regression; hot-spot analysis then runs on residuals.
 - **Option D — External benchmarking** against CDC Diabetes Atlas,
   AR Hospital Discharge Data (HDD), or AHRQ SID to estimate
@@ -475,7 +601,9 @@ care). Candidate adjustment strategies, ranked by rigor:
   report how hot-spot conclusions vary across the δ range.
 
 Deferred to Paper 2 (regression). For Paper 1, Option A sensitivity
-and §4.4 Limitations language are the committed approach.
+plus §4.4 Limitations language plus the payer-stratified Figure 2/3
+(showing the cold spot is Medicare/Medicaid-driven) is the committed
+approach.
 
 ---
 
@@ -485,14 +613,23 @@ and §4.4 Limitations language are the committed approach.
 2. **Claim-level temporal matching not available** — Tier 2 is approximation (§3.4).
 3. **Fixed ZCTA per patient** — relocation not captured (§4.1).
 4. **Memphis edge effect — MNAR undercapture in five Arkansas
-   counties** (§4.4). Crittenden, Mississippi, Phillips, Lee, and
-   St. Francis counties have depressed DFU and amputation rates
-   driven by AR residents using TN-based employer commercial
-   insurance, TN-licensed Medicare Advantage, the Memphis VA Medical
-   Center, or self-pay/charity care at Memphis safety-net providers.
-   AR Medicaid and Medicare FFS are fully captured. Primary handling:
-   Option A exclusion sensitivity (§9); full MNAR adjustment via
-   LODES/regression/pattern-mixture deferred to Paper 2.
+   counties** (§4.4, mechanism revised 2026-04-28). Crittenden,
+   Mississippi, Phillips, Lee, and St. Francis counties have
+   depressed DFU and amputation rates driven primarily by AR
+   residents enrolled in **TN-licensed Medicare Advantage plans**
+   (Humana TN, BCBS-TN MA, Cigna TN MA) that do not report to the AR
+   APCD. Secondary mechanisms include Memphis VA utilization and
+   self-pay/charity care at Memphis safety-net providers. Earlier
+   hypothesis that TN-licensed *commercial* insurance was the primary
+   mechanism was refuted by the payer-stratified analysis (§8.6):
+   the commercial stratum has the highest DFU rate of any region in
+   Border-Memphis (9.77/1,000) and zero commercial cold-spot ZCTAs.
+   AR Medicaid and Medicare FFS are fully captured regardless of
+   where care is delivered. Primary handling: Option A exclusion
+   sensitivity (§9 #8) plus the payer-stratified Figure 2/3 showing
+   the cold spot is Medicare/Medicaid-driven; full MNAR adjustment
+   via TN-MA-penetration correction or pattern-mixture deferred to
+   Paper 2 (§9.1).
 5. **Identity-resolution collisions** — APCD does not have SSN; same
    person switching insurers may receive a new `apcd_unique_id` with
    no linkage to the old record (§6.1). Direction of bias is
@@ -511,3 +648,16 @@ and §4.4 Limitations language are the committed approach.
 15. **DFU coding intensity ≠ disease burden** — rationale for the
     three-outcome framework (§8.5). Reporting DFU prevalence alone
     would mislead public health targeting in Arkansas.
+16. **Pooled cross-payer analysis attenuates true spatial signal**
+    (§8.6, rev 4). Pooled DFU-prevalence Moran's I = 0.18; the
+    Medicare-only stratum gives Moran's I = 0.72 for the same
+    outcome. Public health decisions made from pooled descriptive
+    maps would systematically misidentify the populations and regions
+    in greatest need. The paper therefore presents payer-stratified
+    maps as the primary analytic product and uses pooled maps only as
+    a baseline reference. The Mixed-payer stratum specifically reveals
+    a Delta-Interior amputation hot spot (17 hot vs 7 cold ZCTAs)
+    that is invisible in single-payer or pooled analysis — patients
+    with payer churn (dual-eligibles, Medicaid-expansion churners) are
+    the population with the worst outcomes and they are spatially
+    concentrated.

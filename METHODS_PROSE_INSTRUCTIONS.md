@@ -6,9 +6,13 @@ publication-ready Methods section for *Preventing Chronic Disease* (PCD)
 Call for Papers: Geospatial Perspectives on the Intersection of Chronic
 Disease, Risk Factors, and Health Outcomes** (deadline 2026-05-01).
 
-**Last updated: 2026-04-21** — incorporates the three-outcome framework,
-enrollment-based two-cohort design, Memphis edge effect MNAR documentation,
-local EB smoothing, and analytic-vs-display suppression separation.
+**Last updated: 2026-04-28 (rev 4)** — incorporates the payer-stratified
+analysis as primary methodology (formerly a sensitivity), the corrected
+Memphis edge mechanism (TN-licensed Medicare Advantage rather than
+TN-licensed commercial insurance), and the Mixed-payer Delta-Interior
+amputation finding. Earlier additions (rev 3, 2026-04-21): three-outcome
+framework, enrollment-based two-cohort design, local EB smoothing,
+analytic-vs-display suppression separation.
 
 ---
 
@@ -19,10 +23,12 @@ all have been ingested:
 
 1. `R/_assumptions.md` — the authoritative methodological decisions log.
    **This is the primary source.** Every Methods paragraph must be
-   traceable to a numbered section of this file. Sections added in rev 3
-   (2026-04-21) are especially important: §4.4 Memphis edge effect, §6.1
-   two-cohort enrollment design, §6.4 suppression separation, §8.5 three-
-   outcome framework, §9.1 MNAR options.
+   traceable to a numbered section of this file. Sections added in
+   rev 3–4 are especially important: §4.4 Memphis edge effect (rev 4
+   mechanism: TN-MA, not TN-commercial), §6.1 two-cohort enrollment
+   design, §6.4 suppression separation, §8.5 three-outcome framework,
+   **§8.6 payer-stratified analysis as primary methodology (rev 4)**,
+   §9.1 MNAR options.
 2. `PAPER_OUTLINE.md` — target journal fit, scope boundary (descriptive
    only), population, tiered case definition rationale.
 3. `sas/step3_cohort.sas` — SAS cohort extraction including Part T
@@ -45,6 +51,15 @@ all have been ingested:
    amputation incidence as the outcome.
 9. `R/08_amp_among_dfu_spatial.R` — conditional static spatial analysis:
    amputation rate *among* Tier 2 DFU patients.
+10. `sas/step3d_payer_strata.sas` — assigns each patient to a primary
+    payer category (Medicare / Medicaid / Commercial / Mixed) based on
+    enrollment-month dominance (≥80% threshold). Exports
+    `payer_strata.csv`.
+11. `R/09_payer_stratified_spatial.R` — payer-stratified static spatial
+    analysis. Reruns the DFU prevalence and amputation incidence
+    analyses for each of four payer strata. **This is the primary
+    analytic product** (per rev 4 promotion). Controlled by
+    `DFU_PAYER_STRATUM` and `DFU_OUTCOME` env vars.
 
 ---
 
@@ -112,15 +127,23 @@ added only if the final word count allows.
   ZIP-to-ZCTA crosswalk, and filtered to ZIPs beginning with 71 or 72.
 - Note that ZCTA is **fixed per patient** across the study period
   (relocation not tracked) and that this is a limitation (§4.1).
-- **Describe the Memphis edge effect (§4.4)** explicitly as a data-
-  capture artifact affecting five Arkansas counties (Crittenden,
-  Mississippi, Phillips, Lee, St. Francis). The mechanism is that
-  AR residents employed by Memphis-based organizations carry
-  TN-licensed commercial insurance that does not flow to the AR APCD.
-  AR Medicaid and Medicare FFS are fully captured regardless of where
-  care is delivered. State that the five counties are retained in the
-  primary analysis and handled via a sensitivity-exclusion analysis
-  (§7 below).
+- **Describe the Memphis edge effect (§4.4, mechanism revised
+  2026-04-28)** explicitly as a data-capture artifact affecting five
+  Arkansas counties (Crittenden, Mississippi, Phillips, Lee,
+  St. Francis). The dominant mechanism is **TN-licensed Medicare
+  Advantage plans** (Humana TN, BCBS-TN MA, Cigna TN MA) in which AR
+  border residents enroll via Memphis brokers; these plans do not
+  report to the AR APCD. Secondary mechanisms include Memphis VA
+  utilization and self-pay/charity care at Memphis safety-net
+  providers. AR Medicaid, Medicare FFS, and AR-licensed commercial
+  insurance are fully captured regardless of where care is delivered.
+  Note explicitly that the **payer-stratified analysis** (§3.6 below;
+  §8.6 in the assumptions log) refutes the earlier hypothesis that the
+  cold spot was a TN-commercial-insurance artifact: the commercial
+  stratum has the highest DFU rate of any region in Border-Memphis
+  (9.77/1,000) and zero commercial cold-spot ZCTAs there. State that
+  the five counties are retained in the primary analysis and handled
+  via a sensitivity-exclusion analysis (§3.7 below).
 - Describe the **Option C window**: the primary analysis pools
   commercial and Medicare over **2017–2022** to maximize payer coverage
   while satisfying the ArcGIS EHSA minimum of 10 time slices.
@@ -199,6 +222,23 @@ State that the divergence between these three outcomes *is* a finding
 of the paper: mapping DFU prevalence alone is insufficient for public
 health intervention targeting in Arkansas.
 
+**Key interpretive findings for the paper to highlight (rev 4):**
+- **Ozark "hot DFU prevalence"** is a Medicare-retiree chronic-coding
+  pattern; amputation rates in the same stratum are average. Confirms
+  "chronic mild disease" interpretation.
+- **River Valley "hot amputation"** is robust across Medicare and
+  Mixed-payer strata. Real, under-recognized progression hot spot.
+  Strongest candidate for targeted intervention.
+- **Delta-Interior amputation hot spot in the Mixed-payer stratum**
+  (17 hot vs 7 cold ZCTAs) is **invisible in pooled or single-payer
+  analyses**. Patients with payer churn (dual-eligibles, Medicaid-
+  expansion churners) are spatially concentrated in the Delta-Interior
+  and have the worst amputation outcomes. **Highest-priority finding
+  of the paper for clinical intervention.**
+- **Memphis-border "cold spot"** is a Medicare/Medicaid data-capture
+  artifact (see §3.3); the commercial stratum shows the highest DFU
+  rate of any AR region in those counties.
+
 ### 3.6 Statistical Analysis
 - **Spatial weights:** adaptive k-nearest-neighbor with k = 8,
   row-standardized. Justify the KNN choice over queen contiguity by
@@ -209,11 +249,25 @@ health intervention targeting in Arkansas.
   unreliability. Standard practice for small-area disease mapping;
   preserves spatial heterogeneity while denoising Poisson noise in
   small-denominator rural ZCTAs. Justify by reporting the raw rate
-  range (e.g., 6 to 284 per 1,000) and the post-smoothing range
-  (e.g., 18 to 109 per 1,000) from script 05 output.
+  range and the post-smoothing range from script output. In sparse
+  payer strata where EB produces NA in zero-event neighborhoods, the
+  pipeline falls back to raw rates (`spdep::EBlocal` guard in
+  `R/09_payer_stratified_spatial.R`).
+- **Payer stratification as primary methodology (rev 4 — §8.6).**
+  Each patient is assigned to a primary payer category based on
+  ≥80% enrollment-month dominance: MEDICARE, MEDICAID, COMMERCIAL, or
+  MIXED (no single payer ≥80%). The primary spatial analyses
+  (DFU prevalence, amputation incidence, conditional amputation) are
+  run within each stratum. **The pooled cross-payer analysis is
+  retained only as a baseline reference; it systematically attenuates
+  the spatial signal because it averages across payer-specific
+  gradients that point in different directions** (pooled DFU Moran's
+  I = 0.18 vs Medicare-only Moran's I = 0.72). State this finding
+  explicitly in the Methods.
 - **Global spatial autocorrelation:** Global Moran's I with 999
-  permutations on the pooled 2017–2022 EB-smoothed rate surface.
-  Report the three values from scripts 05, 07, and 08.
+  permutations on the EB-smoothed rate surface. Report values for
+  pooled and for each payer stratum (table format, three outcomes ×
+  five strata).
 - **Local clustering (static):** Local Getis-Ord Gi* with 999
   permutations. Display maps use **single-test z-score thresholds**
   (ArcGIS Pro / Anselin convention; §8.2) with significance bands at
@@ -234,30 +288,30 @@ health intervention targeting in Arkansas.
   trend classification rules.
 
 ### 3.7 Sensitivity Analyses
-Enumerate, in order, the sensitivities from `_assumptions.md` §9:
+Enumerate, in order, the sensitivities from `_assumptions.md` §9.
+**Note (rev 4):** Payer stratification is no longer a sensitivity — it
+is the primary methodology (§3.6). The list now contains:
+
 1. Include ambiguous-DM in Tiers 1 and 2 and re-run Gi* and EHSA;
    report hot-spot concordance.
 2. Compare Tier 1 and Tier 3 hot-spot patterns against Tier 2 primary.
 3. Stricter patient-level Tier 2b (first debridement within 365 days of
    first DFU).
-4. Payer-stratified EHSA (commercial 2017–2022 and Medicare 2014–2022
-   separately) to verify that the pooled hot-spot pattern is not driven
-   by payer mix.
-5. Alternative spatial weights (queen contiguity with island fill; KNN
+4. Alternative spatial weights (queen contiguity with island fill; KNN
    k = 6 and k = 10).
-6. Raw rates vs EB-smoothed rates for visual stability.
-7. **Fractional-cohort sensitivity** — rerun scripts 05/07/08 with
+5. Raw rates vs EB-smoothed rates for visual stability.
+6. **Fractional-cohort sensitivity** — rerun scripts 05/07/08/09 with
    `DFU_COHORT=fractional` to verify hot spot locations are stable
    across the continuous-enrollment inclusion criterion.
-8. **Memphis-border exclusion sensitivity** (§4.4, §9) — rerun all
-   three spatial analyses with the five Memphis-adjacent counties
-   excluded. Stability of hot spots outside those counties
-   establishes robustness of the main findings to the MNAR data-
-   capture artifact.
+7. **Memphis-border exclusion sensitivity** (§4.4) — rerun all three
+   spatial analyses with the five Memphis-adjacent counties excluded.
+   Stability of hot spots outside those counties establishes robustness
+   to the MNAR data-capture artifact.
 
-State that formal MNAR adjustment (LODES commuter correction, spatial
-regression with Memphis-distance covariate, pattern-mixture model) is
-deferred to Paper 2.
+State that formal MNAR adjustment (TN-Medicare-Advantage penetration
+correction from CMS contract enrollment files, spatial regression with
+Memphis-distance covariate, pattern-mixture model) is deferred to
+Paper 2.
 
 ---
 
@@ -305,6 +359,13 @@ deferred to Paper 2.
   - "amputation incidence" (when denominator is all DM)
   - "DFU-to-amputation progression rate" or "conditional amputation
     rate" (when denominator is restricted to DFU patients)
+- **Payer-stratum terminology** (rev 4): always write "Medicare
+  stratum", "Medicaid stratum", "Commercial stratum", and "Mixed-payer
+  stratum". The MIXED stratum is *not* a residual category — it is
+  defined as patients with no single payer accounting for ≥80% of
+  enrollment months. Treat MIXED as substantively meaningful (high-
+  churn population). The pooled (cross-payer) analysis is the
+  "baseline" or "reference" analysis, never the "primary" analysis.
 
 ---
 
@@ -345,7 +406,20 @@ include the checklist (with checks) at the bottom of `paper/methods.md`:
 - [ ] Suppression rule is stated as **numerator <11 OR denominator <20
       for display**; analytic threshold is **denominator ≥20 only**.
 - [ ] Window strategy is stated as **Option C: 2017–2022 combined
-      primary; payer-stratified sensitivity**.
+      primary**.
+- [ ] **Payer stratification is stated as PRIMARY methodology** (rev 4),
+      not a sensitivity. Four strata: Medicare, Medicaid, Commercial,
+      Mixed.
+- [ ] **Pooled cross-payer analysis is described as the baseline /
+      reference, not primary** — and the Methods explicitly notes that
+      pooled Moran's I (0.18) understates the true spatial signal
+      relative to stratum-specific Moran's I (Medicare 0.72).
+- [ ] **Memphis edge mechanism is stated correctly (rev 4):**
+      TN-licensed Medicare Advantage is the dominant mechanism, not
+      TN-licensed commercial insurance. The commercial stratum has the
+      *highest* DFU rate of any region in Border-Memphis.
+- [ ] **Mixed-payer Delta-Interior amputation finding** is named as
+      the highest-priority intervention finding of the paper.
 - [ ] Primary EHSA bins are stated as **12 half-year (H1/H2) slices**
       with 24 seasonal bins as sensitivity.
 - [ ] DFU-aware amputation censoring rule is stated correctly (only
