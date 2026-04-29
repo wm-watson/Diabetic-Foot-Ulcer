@@ -210,6 +210,17 @@ eb_local <- EBlocal(zcta_sf$event_person_halfyears,
                     zcta_sf$dm_person_halfyears, nb)
 zcta_sf$rate_raw      <- zcta_sf$rate_per_1000
 zcta_sf$rate_per_1000 <- eb_local$est * 1000
+# Guard: in sparse strata (e.g., Medicaid/Commercial amputation),
+# EBlocal can produce NA for ZCTAs whose neighborhood has zero events
+# and zero person-time. Fall back to raw rate (which is 0 there) so the
+# Moran's I and Gi* permutation calls have a complete vector.
+n_na <- sum(is.na(zcta_sf$rate_per_1000))
+if (n_na > 0) {
+    message("EBlocal produced NA in ", n_na,
+            " ZCTAs (sparse stratum); falling back to raw rate.")
+    zcta_sf$rate_per_1000[is.na(zcta_sf$rate_per_1000)] <-
+        zcta_sf$rate_raw[is.na(zcta_sf$rate_per_1000)]
+}
 
 set.seed(20260428)
 moran_global <- moran.mc(zcta_sf$rate_per_1000, lw,
