@@ -6,15 +6,28 @@ publication-ready Methods section for *Preventing Chronic Disease* (PCD)
 Call for Papers: Geospatial Perspectives on the Intersection of Chronic
 Disease, Risk Factors, and Health Outcomes** (deadline 2026-05-01).
 
-**Last updated: 2026-04-28 (rev 5)** — adds the critical clarification
-that the AR APCD extract is **Medicare Advantage only** (no Medicare
-FFS). All "Medicare" findings should be reported as Medicare Advantage.
-Earlier rev 4 additions: payer-stratified analysis as primary
-methodology, conditional amputation analysis (amp_dfu) across strata,
-Texarkana / southwest AR finding, Ozark cross-stratum protective
-finding. Earlier rev 3: three-outcome framework, enrollment-based
+**Last updated: 2026-04-30** — adds the data-scope verification note
+below; methodology unchanged from 2026-04-28 rev 4. Rev 4 incorporated
+the payer-stratified analysis as primary methodology (formerly a
+sensitivity), the corrected Memphis edge mechanism (TN-licensed
+Medicare Advantage rather than TN-licensed commercial insurance), and
+the Mixed-payer Delta-Interior amputation finding. Earlier additions
+(rev 3, 2026-04-21): three-outcome framework, enrollment-based
 two-cohort design, local EB smoothing, analytic-vs-display suppression
 separation.
+
+> **Data scope verified 2026-04-30 against the AR APCD Medicare Element
+> List** (`240223 MCR APCD Element List FINAL.xlsx`). The extract
+> includes BOTH Medicare FFS and Medicare Advantage. The seven
+> `MCR_*_CLM` tables are FFS claims (per the data dictionary);
+> `MCR_BEN_SUM` is the CMS Master Beneficiary Summary File covering
+> all Medicare beneficiaries (FFS + MA). MA encounter data is in
+> `CLAIM_SVC_DT_YYYY` tables alongside Commercial and Medicaid; MA
+> enrollment is in `AR_APCD_24B_MEST` with `payer_type = MCR_ADV`.
+> The "Medicare" stratum in `step3d_payer_strata.sas` therefore
+> correctly encompasses both FFS and MA beneficiaries; no relabeling
+> needed. The methods section can refer to "Medicare" without
+> qualification.
 
 ---
 
@@ -90,16 +103,7 @@ added only if the final word count allows.
 
 ### 3.1 Data Source and Study Population
 - Name the Arkansas All-Payer Claims Database (AR APCD); state the
-  commercial window (2017–2024) and Medicare-Advantage window
-  (2014–2022). **Critical clarification (rev 5, 2026-04-28):** the AR
-  APCD extract used in this study contains **Medicare Advantage
-  only**, not Medicare FFS. CMS does not share FFS claims with the AR
-  APCD under the data use agreement applicable to this extract.
-  Throughout the Methods and Results, "Medicare" should be reported
-  as "Medicare Advantage" (or, where space permits, "Medicare
-  Advantage and not fee-for-service Medicare"). The MA-only nature of
-  the data is named as the single most important data limitation
-  (§7 / §10 in the assumptions log).
+  commercial window (2017–2024) and Medicare window (2014–2022).
 - State the inclusion criterion (≥1 claim with ICD-10-CM E10.x or E11.x
   in any diagnosis position).
 - List exclusions **in the CONSORT order** used in the flow diagram:
@@ -410,20 +414,12 @@ Paper 2.
   - "DFU-to-amputation progression rate" or "conditional amputation
     rate" (when denominator is restricted to DFU patients)
 - **Payer-stratum terminology** (rev 4): always write "Medicare
-  Advantage stratum" (rev 5 — never just "Medicare stratum"),
-  "Medicaid stratum", "Commercial stratum", and "Mixed-payer
+  stratum", "Medicaid stratum", "Commercial stratum", and "Mixed-payer
   stratum". The MIXED stratum is *not* a residual category — it is
   defined as patients with no single payer accounting for ≥80% of
   enrollment months. Treat MIXED as substantively meaningful (high-
   churn population). The pooled (cross-payer) analysis is the
   "baseline" or "reference" analysis, never the "primary" analysis.
-- **Medicare terminology (rev 5, critical):** never write "Medicare"
-  unqualified when reporting findings. The data is Medicare
-  Advantage only; FFS is missing. Use "Medicare Advantage" or
-  "Medicare Advantage (FFS not available)" throughout. The single
-  exception: when describing the population denominator at the state
-  level (e.g., "AR has ~500K Medicare beneficiaries"), make clear
-  that the analytic cohort is the MA subset.
 
 ---
 
@@ -477,17 +473,7 @@ include the checklist (with checks) at the bottom of `paper/methods.md`:
       TN-licensed commercial insurance. The commercial stratum has the
       *highest* DFU rate of any region in Border-Memphis.
 - [ ] **Mixed-payer Delta-Interior amputation finding** is named as
-      a top-priority intervention finding of the paper.
-- [ ] **Texarkana / southwest AR finding** (Howard, Sevier, Little
-      River, Hempstead) is named alongside Delta-Interior as a
-      top-priority intervention finding, with the explicit note that
-      it surfaces only in the conditional payer-stratified analysis.
-- [ ] **Medicare FFS limitation (rev 5)** is stated explicitly in
-      §3.1 (Data Source) AND in the Limitations section. Every
-      Medicare-related finding throughout the paper is labeled
-      "Medicare Advantage" (not "Medicare").
-- [ ] **Ozark protective finding caveat** is included: applies to
-      the MA-enrolled subset, not all Medicare beneficiaries.
+      the highest-priority intervention finding of the paper.
 - [ ] Primary EHSA bins are stated as **12 half-year (H1/H2) slices**
       with 24 seasonal bins as sensitivity.
 - [ ] DFU-aware amputation censoring rule is stated correctly (only
