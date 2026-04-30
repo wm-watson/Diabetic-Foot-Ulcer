@@ -3,7 +3,15 @@
 **Purpose:** Running log of every methodological decision made in the R pipeline.
 Every item here must be addressable in the paper's Methods or Limitations section.
 
-Last updated: 2026-04-21 (rev 3: enrollment-based denominator, two-cohort design)
+Last updated: 2026-04-28 (rev 5: Medicare FFS not in extract — see §6.1, §10 #1)
+
+> **TO-DO for the author:** Verify against the AR APCD Data Use
+> Agreement that the extract is Medicare Advantage only (no Medicare
+> FFS). The user's understanding as of 2026-04-28 is that the seven
+> `APCD_MCR_*_CLM` claim tables and `APCD_MCR_BEN_SUM` contain MA
+> encounter data and MA beneficiary enrollment, despite the legacy
+> "MCR_" naming convention. If the DUA in fact grants access to FFS,
+> §6.1, §8.5, §8.6, and §10 #1 will need to be reverted/revised.
 
 ---
 
@@ -92,7 +100,7 @@ Last updated: 2026-04-21 (rev 3: enrollment-based denominator, two-cohort design
 - TIGER/Line 2020 national ZCTAs via `tigris` package, filtered to AR ZCTAs present in our cohort.
 - S2 geometry disabled (`sf_use_s2(FALSE)`) to avoid degenerate-edge errors after state clipping.
 
-### 4.4 Memphis edge effect (rev 4, 2026-04-28 — mechanism corrected)
+### 4.4 Memphis edge effect (rev 5, 2026-04-28 — FFS-missing context added)
 
 Five counties in eastern Arkansas lie within roughly 30 miles of
 Memphis, Tennessee: **Crittenden, Mississippi, Phillips, Lee, and
@@ -136,14 +144,22 @@ Secondary mechanisms (smaller contribution):
 - Some commercial leakage may persist for AR residents on small TN
   group plans, but the data show this is a minor contributor.
 
-Mechanisms that **do not** contribute to the edge effect:
+Mechanisms that **do not** contribute specifically to the
+*Memphis-border* edge effect (but see §6.1 for the broader FFS gap):
 - Tennessee Medicaid / TennCare — Medicaid is state-residency-based;
   an AR resident cannot be on TN Medicaid. AR Medicaid claims for
   out-of-state care do flow to the AR APCD.
 - AR-licensed commercial insurance covering care at Memphis providers
   — these claims flow to the APCD regardless of where care is
   delivered.
-- Medicare FFS at Memphis providers — CMS-reported and included.
+
+**Important caveat (rev 5, 2026-04-28):** Medicare FFS is missing
+from this entire APCD extract (§6.1), not just from Border-Memphis.
+The Memphis-border cold spot is therefore a *combination* of
+TN-licensed MA capture failure (the Memphis-specific mechanism) plus
+the broader FFS undersampling that affects all rural AR counties.
+The Memphis edge is incremental on top of the statewide FFS gap, not
+distinct from it.
 
 **Why the commercial stratum looks "normal" in Border-Memphis:** the
 small AR-licensed commercial population we *do* capture there is a
@@ -259,15 +275,36 @@ denominator bias not offset by the numerator. The 50% threshold is
 analogous to HEDIS's 11/12 annual continuous enrollment rule, adapted
 to our 6-month bin structure.
 
-#### Medicare FFS handling
-MEST does not cover Medicare FFS (only Medicare Advantage, payer_type
-MCR_ADV). For FFS beneficiaries we have `APCD_MCR_BEN_SUM` with
-year-level presence only (`bene_enrollmt_ref_yr`). **Assumption:** if a
-`bene_id` has any BEN_SUM record for year Y, the beneficiary is
-credited with 12/12 months of enrollment in year Y. Justification: FFS
-disenrollment mid-year is rare (death or MA switch, either of which
-removes them from further claims in the downstream data). Slightly
-over-counts, but does so uniformly across ZCTAs — not a spatial bias.
+#### Medicare FFS NOT in extract (rev 5, 2026-04-28)
+
+**Critical correction:** the AR APCD extract used in this study does
+not include Medicare FFS. All Medicare data — both the seven
+`APCD_MCR_*_CLM` claim tables and `APCD_MCR_BEN_SUM` — is **Medicare
+Advantage encounter data and MA beneficiary enrollment**, despite the
+"MCR_" naming convention. The naming is legacy from the table
+structure used for Medicare administrative claims; in this APCD
+extract those tables are populated by AR-licensed MA plans submitting
+claims and enrollment in the same format. (This should be verified
+against the Data Use Agreement; the user's understanding as of
+2026-04-28 is that the extract is MA-only.)
+
+**Implications throughout this analysis:**
+- The "MEDICARE" payer stratum in `step3d_payer_strata.sas` is in
+  reality a **Medicare Advantage** stratum. The label is retained in
+  the code for stability but should be reported as "Medicare
+  Advantage" in the paper.
+- BEN_SUM-derived enrollment (12/12 months per year of presence) is
+  applied to **MA beneficiaries**, not FFS. The bitwise OR with MEST
+  MCR_ADV is therefore a redundancy check across two MA enrollment
+  views, not a separate FFS contribution.
+- **Medicare FFS beneficiaries are entirely missing** from the
+  cohort. Nationally, FFS represents ~45–55% of Medicare; in rural
+  Arkansas the FFS share is likely *higher* (lower MA plan
+  availability rurally), so the FFS gap disproportionately affects
+  rural counties — particularly the Ozarks and parts of the Delta.
+- This is a much larger limitation than the Memphis edge effect
+  alone. See §10 (limitations) #4a (new) and §8.5 interpretation
+  caveats.
 
 #### Identity-resolution (collision) limitation
 The APCD does not have access to Social Security numbers. Identity
@@ -435,17 +472,27 @@ finding. Five regions have distinguishable spatial signatures:
 - **Ozarks** — Hot on 05 (most coded DFU), Cold on 07 (low amputation
   incidence), **Strongly Cold across ALL FOUR payer strata in the
   conditional analysis (08 + payer-stratified)**. The Ozark
-  protective signal is robust across Medicare (29 cold / 5 hot
-  ZCTAs), Medicaid (13 cold / 2 hot), Commercial (0 cold / 4 hot —
-  small N, less interpretable), and **especially Mixed-payer (54 cold
-  / 0 hot, 71% of Ozark Mixed-payer ZCTAs are cold)**. Even patients
-  with the most fragmented coverage in the Ozarks rarely progress to
-  amputation. Interpretation: **chronic mild DFU in retiree
-  populations with stable primary care** is the leading hypothesis,
-  but the cross-stratum robustness suggests an Ozark-wide protective
-  factor that warrants its own investigation (e.g., regional wound-
-  care provider density, primary-care continuity, lower disease
-  severity at presentation).
+  protective signal is robust across Medicare Advantage (29 cold / 5
+  hot ZCTAs), Medicaid (13 cold / 2 hot), Commercial (0 cold / 4
+  hot — small N, less interpretable), and **especially Mixed-payer
+  (54 cold / 0 hot, 71% of Ozark Mixed-payer ZCTAs are cold)**. Even
+  patients with the most fragmented coverage in the Ozarks rarely
+  progress to amputation. Interpretation: **chronic mild DFU in
+  retiree populations with stable primary care** is the leading
+  hypothesis, but the cross-stratum robustness suggests an Ozark-wide
+  protective factor that warrants its own investigation (e.g.,
+  regional wound-care provider density, primary-care continuity,
+  lower disease severity at presentation). **Important caveat (rev 5,
+  2026-04-28):** Medicare FFS is missing from this study (§6.1),
+  and rural Ozark counties likely have *higher* FFS penetration than
+  the state average. The captured Ozark Medicare population is the
+  MA-enrolled subset — possibly a selected group (younger retirees,
+  those with prior commercial-MA experience, those near MA-network
+  providers). The protective finding therefore applies *to the
+  MA-enrolled Ozark subset* and may not generalize to all Ozark
+  Medicare beneficiaries. The cross-stratum robustness (Medicaid +
+  Commercial + Mixed cold) does support the protective hypothesis but
+  cannot rule out FFS-selection bias entirely.
 
 - **Delta-Interior** — Normal on 05 (11.1/1000, at state average), Hot
   on 07 (0.85/1000, elevated amputation), Normal on 08 in the pooled
@@ -458,16 +505,20 @@ finding. Five regions have distinguishable spatial signatures:
   payer-stratified analysis surfaces it.
 
 - **Delta-Border-Memphis** — Cold on 05 and 07 (DFU prevalence and
-  unconditional amputation), driven by Medicare/Medicaid undercapture
-  (§4.4). **The conditional payer-stratified analysis re-frames this
-  finding:** among the DFU patients we *do* capture in Border-Memphis,
-  Medicare progression is **elevated** (8 hot vs 5 cold ZCTAs in the
-  amp_dfu Medicare stratum, EB rate 19.2/1,000 DFU PHY — well above
-  state average). This means: the cold spot for *prevalence* is a
-  data-capture artifact, but the cold spot does **not** indicate that
-  Border-Memphis has favorable disease outcomes. The captured patients
-  there progress to amputation at high rates; the missing patients
-  (TN-MA enrollees) likely have similar or worse rates. Real disease
+  unconditional amputation). The cold pattern reflects multiple
+  capture failures: TN-licensed MA plans missing (§4.4) PLUS the
+  broader Medicare FFS gap (§6.1) that affects the entire study but
+  has its largest impact in rural border counties where FFS
+  penetration is highest. **The conditional payer-stratified analysis
+  re-frames this finding:** among the DFU patients we *do* capture in
+  Border-Memphis, Medicare-Advantage progression is **elevated** (8
+  hot vs 5 cold ZCTAs in the amp_dfu MA stratum, EB rate 19.2/1,000
+  DFU PHY — well above state average). This means: the cold spot for
+  *prevalence* is a data-capture artifact (TN-MA + FFS missing), but
+  the cold spot does **not** indicate that Border-Memphis has
+  favorable disease outcomes. The captured MA patients there progress
+  to amputation at high rates; the missing patients (TN-MA enrollees,
+  FFS beneficiaries) likely have similar or worse rates. Real disease
   severity in Border-Memphis is at least as bad as Delta-Interior —
   possibly worse — but cannot be estimated from APCD alone.
 
@@ -529,7 +580,11 @@ the paper.
 **Stratification scheme** (`sas/step3d_payer_strata.sas`):
 each patient's enrollment-month totals across 2017–2022 are computed
 from the MEST + BEN_SUM:
-- `months_medicare`   = months with MCR_ADV or BEN_SUM-FFS coverage
+- `months_medicare`   = months with MCR_ADV (MEST) or BEN_SUM
+  presence. **Both sources are Medicare Advantage** in this extract
+  (§6.1, rev 5); the "Medicare" label in the script and downstream
+  outputs should be read as "Medicare Advantage." Medicare FFS is
+  not captured.
 - `months_medicaid`   = months with MCD / MCD_QHP / HCIP / PASSE
 - `months_commercial` = months with COM / QHP-non-MCD / EBD
 
@@ -545,10 +600,15 @@ Stratum sizes from the fractional cohort (full enrollment population):
 | COMMERCIAL | 24,959 |
 
 **Interpretive value:**
-- **Medicare stratum** — most reliable signal for DFU coding intensity
-  and chronic management; reflects retiree primary-care patterns.
-  Strongest Moran's I (0.72 for DFU prevalence) because the population
-  is large (N=154,651) and care-utilization is consistent.
+- **Medicare Advantage stratum** ("Medicare" in code labels) — most
+  reliable signal for the MA-enrolled retiree subpopulation; reflects
+  MA primary-care patterns. Strongest Moran's I (0.72 for DFU
+  prevalence) because the population is large (N=154,651) and
+  care-utilization is consistent. **Caveat (rev 5):** does NOT
+  represent all AR Medicare beneficiaries — Medicare FFS is missing
+  from the extract, and rural FFS penetration is likely higher than
+  rural MA penetration. Findings from this stratum must be reported
+  as Medicare-Advantage-specific, not all-Medicare.
 - **Medicaid stratum** — captures the working-poor and disabled
   populations with eligibility-based coverage. Smaller N (25,510) but
   represents the highest-poverty subset of AR diabetics.
@@ -673,10 +733,21 @@ approach.
 
 ## 10. Known Limitations (for paper Discussion)
 
-1. **Case definition validity** — no chart validation; claims-based only.
-2. **Claim-level temporal matching not available** — Tier 2 is approximation (§3.4).
-3. **Fixed ZCTA per patient** — relocation not captured (§4.1).
-4. **Memphis edge effect — MNAR undercapture in five Arkansas
+1. **Medicare FFS is not in the APCD extract used for this study
+   (§6.1, rev 5).** All Medicare data are Medicare Advantage. FFS
+   represents ~45–55% of Medicare beneficiaries nationally, and
+   likely a higher share in rural AR (where MA plan availability is
+   sparser). The "Medicare" stratum in the payer-stratified analysis
+   is therefore a Medicare Advantage stratum, and Medicare findings
+   should be reported as such. The FFS gap disproportionately affects
+   rural counties — particularly the Ozarks and parts of the Delta —
+   and any rural-focused interpretation must caveat that it applies
+   to the MA-enrolled subset only. **This is the single most
+   important data limitation of the paper.**
+2. **Case definition validity** — no chart validation; claims-based only.
+3. **Claim-level temporal matching not available** — Tier 2 is approximation (§3.4).
+4. **Fixed ZCTA per patient** — relocation not captured (§4.1).
+5. **Memphis edge effect — MNAR undercapture in five Arkansas
    counties** (§4.4, mechanism revised 2026-04-28). Crittenden,
    Mississippi, Phillips, Lee, and St. Francis counties have
    depressed DFU and amputation rates driven primarily by AR
@@ -694,27 +765,27 @@ approach.
    the cold spot is Medicare/Medicaid-driven; full MNAR adjustment
    via TN-MA-penetration correction or pattern-mixture deferred to
    Paper 2 (§9.1).
-5. **Identity-resolution collisions** — APCD does not have SSN; same
+6. **Identity-resolution collisions** — APCD does not have SSN; same
    person switching insurers may receive a new `apcd_unique_id` with
    no linkage to the old record (§6.1). Direction of bias is
    conservative (deflates rates in high-churn areas).
-6. **Ambiguous-DM fraction is large** — likely coding-driven, not biological.
-7. **Left censoring** — DM history before 2017/2014 unknown (§5.4).
-8. **Medicare 2022 cutoff** — 2023–2024 EHSA on commercial-only (§5.5).
-9. **Race unavailable for commercial** — racial disparity analysis limited to Medicare.
-10. **Uninsured not captured** — AR APCD is insured-population only; uninsured diabetics and those paying cash are invisible.
-11. **Dual-eligibles simplified to Medicare** — commercial history before Medicare enrollment lost.
-12. **ZCTA = geographic proxy for neighborhood** — does not align with care service areas, food environments, or census tracts.
-13. **Sample size for small-area estimation** — under current analytic
+7. **Ambiguous-DM fraction is large** — likely coding-driven, not biological.
+8. **Left censoring** — DM history before 2017/2014 unknown (§5.4).
+9. **Medicare Advantage 2022 cutoff** — 2023–2024 EHSA on commercial-only (§5.5).
+10. **Race unavailable for commercial** — racial disparity analysis limited to the Medicare Advantage subset.
+11. **Uninsured not captured** — AR APCD is insured-population only; uninsured diabetics and those paying cash are invisible.
+12. **Dual-eligibles simplified to Medicare Advantage** — commercial history before MA enrollment lost.
+13. **ZCTA = geographic proxy for neighborhood** — does not align with care service areas, food environments, or census tracts.
+14. **Sample size for small-area estimation** — under current analytic
     threshold (dm_denom ≥ 20), 602 of 614 AR ZCTAs are modeled. The
     12 excluded have truly too-sparse diabetic populations.
-14. **No adjustment for age, sex, race in descriptive prevalence** — crude rates only; adjustment deferred to Paper 2.
-15. **DFU coding intensity ≠ disease burden** — rationale for the
+15. **No adjustment for age, sex, race in descriptive prevalence** — crude rates only; adjustment deferred to Paper 2.
+16. **DFU coding intensity ≠ disease burden** — rationale for the
     three-outcome framework (§8.5). Reporting DFU prevalence alone
     would mislead public health targeting in Arkansas.
-16. **Pooled cross-payer analysis attenuates true spatial signal**
+17. **Pooled cross-payer analysis attenuates true spatial signal**
     (§8.6, rev 4). Pooled DFU-prevalence Moran's I = 0.18; the
-    Medicare-only stratum gives Moran's I = 0.72 for the same
+    Medicare-Advantage stratum gives Moran's I = 0.72 for the same
     outcome. Public health decisions made from pooled descriptive
     maps would systematically misidentify the populations and regions
     in greatest need. The paper therefore presents payer-stratified
@@ -722,6 +793,6 @@ approach.
     a baseline reference. The Mixed-payer stratum specifically reveals
     a Delta-Interior amputation hot spot (17 hot vs 7 cold ZCTAs)
     that is invisible in single-payer or pooled analysis — patients
-    with payer churn (dual-eligibles, Medicaid-expansion churners) are
-    the population with the worst outcomes and they are spatially
-    concentrated.
+    with payer churn (Medicaid-expansion churners, MA → commercial
+    transitions) are the population with the worst outcomes and they
+    are spatially concentrated.
