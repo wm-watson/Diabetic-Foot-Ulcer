@@ -1,20 +1,34 @@
 # Instructions for an LLM: Draft the Methods Section
 
 **Purpose.** Convert the structured decisions in this repository into a
-publication-ready Methods section for *Preventing Chronic Disease* (PCD)
-"Original Research" or "GIS Snapshot" format, targeting the **January 2026
-Call for Papers: Geospatial Perspectives on the Intersection of Chronic
-Disease, Risk Factors, and Health Outcomes** (deadline 2026-05-01).
+publication-ready Methods section (and full manuscript draft) for
+**Health & Place** (Elsevier). Rolling submission; no fixed deadline.
 
-**Last updated: 2026-04-30** — adds the data-scope verification note
-below; methodology unchanged from 2026-04-28 rev 4. Rev 4 incorporated
-the payer-stratified analysis as primary methodology (formerly a
-sensitivity), the corrected Memphis edge mechanism (TN-licensed
-Medicare Advantage rather than TN-licensed commercial insurance), and
-the Mixed-payer Delta-Interior amputation finding. Earlier additions
-(rev 3, 2026-04-21): three-outcome framework, enrollment-based
-two-cohort design, local EB smoothing, analytic-vs-display suppression
-separation.
+**Journal pivot (2026-05-05):** The original target was *Preventing
+Chronic Disease* (PCD), Jan 2026 Call for Papers (deadline 2026-05-01).
+That deadline passed. The paper has been retargeted to **Health &
+Place** because (a) H&P's spatial-epidemiology readership is the
+natural audience for the methodological contribution (payer-stratified
+spatial analysis + three-outcome framework + fractional-cohort
+selection-bias diagnosis); (b) H&P allows longer-form Methods and more
+figures, accommodating the multi-stratum × multi-outcome × cohort-
+sensitivity matrix; (c) reviewers will not need basic spatial-epi
+terminology explained, freeing word budget for substantive findings.
+See §2 below for the H&P-specific structural requirements that differ
+from the prior PCD framing.
+
+**Last updated: 2026-05-05** — pivots target journal from PCD to
+Health & Place; promotes fractional cohort to primary (after
+2026-04-30 hypothesis-test analysis showed continuous cohort
+systematically excludes high-churn populations and hides the Delta
+amputation signal). Methodology decisions otherwise unchanged from
+2026-04-28 rev 4. Rev 4 incorporated the payer-stratified analysis as
+primary methodology (formerly a sensitivity), the corrected Memphis
+edge mechanism (TN-licensed Medicare Advantage rather than TN-licensed
+commercial insurance), and the Mixed-payer Delta-Interior amputation
+finding. Earlier additions (rev 3, 2026-04-21): three-outcome
+framework, enrollment-based two-cohort design, local EB smoothing,
+analytic-vs-display suppression separation.
 
 > **Data scope verified 2026-04-30 against the AR APCD Medicare Element
 > List** (`240223 MCR APCD Element List FINAL.xlsx`). The extract
@@ -56,7 +70,13 @@ all have been ingested:
    (Member Enrollment Selection Table) and yearly presence from
    APCD_MCR_BEN_SUM. Exports `cohort_continuous.csv` (continuous
    enrollment 2017–2022) and `cohort_fractional.csv` (fractional
-   person-time). **Primary cohort = continuous.**
+   person-time). **Primary cohort = fractional (rev 6, 2026-05-05).**
+   The continuous cohort is reported as the principal sensitivity
+   analysis. Rationale: the 2026-04-30 cohort-comparison test showed
+   that continuous-enrollment selection systematically excludes the
+   highest-risk Arkansas populations (Medicaid-churn, dual-eligibles)
+   and hides the Delta-Interior amputation signal. See §8.6 of the
+   assumptions log for the empirical comparison.
 6. `sas/step5_zip_extract.sas` — ZIP-based geographic assignment and
    final analytic file assembly; cross-payer study_id construction.
 7. `R/01_load_and_clean.R` through `R/06_ehsa_prep.R` — the R pipeline
@@ -81,21 +101,67 @@ all have been ingested:
 
 ---
 
-## 2. Required structure (PCD house style)
+## 2. Required structure (Health & Place house style)
 
-Produce seven subsections **in this order** and under **these exact
-headings**:
+H&P uses a flexible structured-section format. Produce the following
+**main sections** for the Methods, with the listed subsections inside
+each. The H&P audience tolerates and rewards methodological depth, so
+prefer slightly longer subsections with clear rationale over
+PCD-style telegraphic prose.
 
-1. **Data Source and Study Population**
-2. **Diabetes and Diabetic Foot Ulcer Case Definitions**
-3. **Geographic Unit and Time Bins**
-4. **Enrollment-Based Denominators and Cohort Definition**
-5. **Outcome Measures** *(new, 2026-04-21)*
-6. **Statistical Analysis**
-7. **Sensitivity Analyses**
+### 2.1 Data and Study Population
+1. **Data Source** (AR APCD; Medicare extract verified)
+2. **Inclusion and Exclusion Criteria**
+3. **Cross-Payer Linkage and Identity-Resolution**
 
-An optional 8th subsection — **Software and Reproducibility** — should be
-added only if the final word count allows.
+### 2.2 Case Definitions
+4. **Diabetes Classification** (T1D, T2D, Ambiguous)
+5. **Diabetic Foot Ulcer Tiered Definitions** (Tier 1, Tier 2, Tier 3)
+6. **Procedure Codes** (debridement, amputation)
+
+### 2.3 Geographic and Temporal Framework
+7. **ZCTA Assignment and Filtering** (incl. Memphis edge effect §4.4)
+8. **Time-Bin Structure** (12 half-year bins; sensitivity seasonal)
+9. **Study Window** (Option C: 2017–2022)
+
+### 2.4 Denominator Construction (Enrollment-Based, Two-Cohort)
+10. **Enrollment-Weighted Person-Halfyears** (MEST + BEN_SUM)
+11. **Fractional Cohort (PRIMARY)** — full description
+12. **Continuous-Enrollment Cohort (SENSITIVITY)** — full description
+13. **Why Fractional is Primary** — selection-bias rationale (§8.6)
+
+### 2.5 Outcomes (Three-Measure Framework)
+14. **DFU Coding Prevalence** (script 05)
+15. **Amputation Incidence** (script 07)
+16. **Conditional Amputation among DFU Patients** (script 08)
+17. **Why Three Outcomes** — divergence as finding (§8.5)
+
+### 2.6 Spatial Statistical Methods
+18. **Spatial Weights** (adaptive KNN, k=8)
+19. **Local Empirical Bayes Smoothing** (Marshall 1991)
+20. **Global Moran's I** (999 permutations)
+21. **Local Getis-Ord Gi*** with single-test z-bands (§8.2)
+22. **LISA** (sensitivity)
+23. **Multiple Testing** (FDR-robust subset reported separately)
+
+### 2.7 Payer Stratification (Primary Analytic Product)
+24. **Stratification Scheme** (≥80% dominance; Mixed = residual)
+25. **Why Stratified** (pooled Moran's I attenuates true signal)
+26. **Stratum × Outcome Matrix** (4 strata × 3 outcomes = 12 analyses)
+
+### 2.8 Sensitivity Analyses
+27. **Cohort Comparison** (fractional vs continuous; §8.6)
+28. **Tier 1 / Tier 3 Outcome Sensitivity**
+29. **Memphis-Border Exclusion**
+30. **Alternative Spatial Weights**
+
+### 2.9 Software and Reproducibility (REQUIRED for H&P)
+H&P expects a reproducibility statement; word budget allows for a
+substantive paragraph here (not optional as it would be for PCD).
+Include: R/SAS versions, key packages with versions (sf, spdep,
+data.table, ggplot2, tigris), public GitHub URL
+(https://github.com/wm-watson/Diabetic-Foot-Ulcer), data access
+statement (AR APCD via DUA; not publicly redistributable).
 
 ---
 
@@ -173,7 +239,7 @@ added only if the final word count allows.
 - Cite `step3b_bin_activity.sas` as the source of the per-patient × bin
   activity flags.
 
-### 3.4 Enrollment-Based Denominators and Cohort Definition *(rewritten 2026-04-21)*
+### 3.4 Enrollment-Based Denominators and Cohort Definition *(rev 6, 2026-05-05 — cohort priority flipped)*
 
 This subsection replaces the prior "claims-observed denominator"
 language. The prior approach (count of distinct DM patients with any
@@ -192,25 +258,43 @@ rates in rural/Medicaid-heavy ZCTAs. State the following:
 - Medicare FFS beneficiaries (not in MEST) are credited with 12/12
   months in any year their BEN_SUM record is present. Cite §6.1 for
   justification.
-- **Two cohorts are constructed:**
-  - **Cohort 1 (PRIMARY): Continuously enrolled.** All 72 months of
-    medical enrollment 2017–2022 (merged across payers). Patients
-    contribute 1.0 person-halfyear per bin. Cohort size from
-    `enrollment_summary.txt`.
-  - **Cohort 2 (SENSITIVITY): Fractional person-time.** Any patient
-    with ≥1 month of medical enrollment; contributes `enrolled_months/6`
-    per bin with a per-bin floor of ≥3 of 6 months (50% of the bin).
+- **Two cohorts are constructed (rev 6, 2026-05-05 — priority
+  flipped):**
+  - **Cohort A (PRIMARY): Fractional person-time.** Any patient with
+    ≥1 month of medical enrollment 2017–2022 contributes
+    `enrolled_months/6` per bin, with a per-bin floor of ≥3 of 6
+    months (50% of the bin). Below the floor, the bin contributes
+    zero (rationale: more unobserved than observed). Cohort size:
+    313,177 patients. The 50% floor is analogous to HEDIS's 11/12
+    annual continuous enrollment rule, scaled to the 6-month bin
+    structure.
+  - **Cohort B (SENSITIVITY): Continuously enrolled.** All 72 months
+    of medical enrollment 2017–2022 (merged across payers). Patients
+    contribute 1.0 person-halfyear per bin. Cohort size: 190,943
+    patients (~41% smaller than fractional).
+- **Why fractional is primary** (state explicitly in Methods):
+  empirical comparison (2026-04-30) demonstrated that the
+  continuous-enrollment cohort systematically excludes
+  high-churn populations — the very Medicaid, dual-eligible, and
+  payer-transitioning patients most affected by Arkansas's
+  diabetic foot ulcer burden. The fractional cohort produced
+  pooled Moran's I of 0.27 (DFU prevalence) and 0.44 (amputation
+  incidence) versus 0.18 and 0.30 in continuous, and revealed a
+  Delta-Interior amputation hot spot (3 cold / 10 hot ZCTAs)
+  that was ambiguous in continuous (14 / 14). Selection-bias
+  rationale rather than convention drives the cohort choice.
 - Numerator is cohort-dependent: a patient contributes a case to the
   bin containing their first Tier-2-qualifying DFU (or first amputation
   for scripts 07/08). Numerator-date establishes enrollment at that
   instant, so no additional enrollment check is required.
-- **Small-cell suppression (§6.4):** the PCD display rule (numerator
-  <11 OR denominator <20) is applied to displayed rate labels and cell-
-  level tables only. The spatial *analysis* (Gi*/LISA, EHSA) runs on
-  all ZCTAs with a valid denominator (dm_denom ≥ 20 person-halfyears)
-  so that low-DFU ZCTAs are included in cluster detection. This
-  follows standard spatial-epi practice (Waller & Gotway 2004) and
-  allows the local EB smoothing to stabilize small-N estimates.
+- **Small-cell suppression (§6.4):** the CDC small-cell display rule
+  (numerator <11 OR denominator <20) is applied to displayed rate
+  labels and cell-level tables only. The spatial *analysis*
+  (Gi*/LISA, EHSA) runs on all ZCTAs with a valid denominator
+  (dm_denom ≥ 20 person-halfyears) so that low-DFU ZCTAs are included
+  in cluster detection. This follows standard spatial-epi practice
+  (Waller & Gotway 2004) and allows the local EB smoothing to
+  stabilize small-N estimates.
 - **DFU-aware amputation censoring (§5.3):** patients are removed from
   numerator and denominator in bins strictly after their first
   amputation **only when** the first amputation occurred on or after
@@ -373,16 +457,29 @@ Paper 2.
 
 - **Voice:** third-person, past tense, active voice where possible
   ("We defined…", "Patients were excluded if…").
-- **Word budget:** target 900–1,100 words for the full Methods section
-  (PCD Original Research). If the format is GIS Snapshot, target 500
-  words and collapse subsections 3.4 and 3.7 into one paragraph each.
+- **Word budget (H&P, rev 6):** target **2,000–2,500 words for the
+  full Methods section**. H&P typically allows up to 7,000 words for
+  the full manuscript including all sections; Methods proportional
+  share is generous. The earlier 900–1,100 PCD target is obsolete —
+  H&P readers expect more methodological detail than PCD readers do.
+  Within Methods, allocate roughly:
+  - §2.1 Data and Population: 250 words
+  - §2.2 Case Definitions: 350 words (Tier 2 temporal + Barshes)
+  - §2.3 Geographic and Temporal: 350 words (incl. Memphis edge)
+  - §2.4 Denominator Construction: 400 words (the methodologically
+    novel part; deserves the most ink)
+  - §2.5 Outcomes: 250 words (the three-outcome rationale)
+  - §2.6 Spatial Statistical Methods: 350 words
+  - §2.7 Payer Stratification: 250 words
+  - §2.8 Sensitivities: 150 words
+  - §2.9 Software / Reproducibility: 100 words
 - **Numbers:** use the exact counts produced by
   `outputs/descriptives/flow_counts_full.csv`,
   `D:\WPWatson\enrollment_summary.txt` (copied to Dropbox), and
   the Gi*/LISA tables in `outputs/static_spatial/`. If those files do
   not yet exist when you draft, insert the placeholder `[N from
   flow_counts]` and the author will fill in.
-- **Citations (minimum set to include):**
+- **Citations (minimum set to include for H&P, rev 6):**
   - **Barshes NR**, Minc SD. "Healthcare disparities in vascular
     surgery…" (Tier 2 temporal definition rationale).
   - **Getis A, Ord JK.** "The analysis of spatial association by use of
@@ -396,7 +493,22 @@ Paper 2.
     display suppression).
   - **Harris NL et al.** or ArcGIS Pro documentation (EHSA
     classification).
-  - **CDC/PCD author guidelines** (for the suppression threshold).
+  - **MAUP-relevant citation** (Openshaw 1984 or similar) — H&P
+    reviewers expect explicit acknowledgment of the modifiable areal
+    unit problem when ZCTAs are the chosen unit. Note that we held
+    ZCTA as the analytic unit and discussed county-level aggregation
+    as a deferred sensitivity (§8.6 of assumptions).
+  - **Diez Roux AV** 2001 ("Investigating neighborhood and area
+    effects on health") — canonical H&P-friendly reference for
+    place-based health analysis.
+  - **Krieger N, Williams DR, Moss NE** 1997 ("Measuring social
+    class in US public health research") — for the payer-as-proxy-
+    for-SES interpretation in §2.7.
+  - **Barshes-style amputation rate citations** for AR Delta context
+    (regional disparities in DFU outcomes).
+  - **CDC small-cell suppression guidance** (for the numerator <11 /
+    denominator <20 threshold; this is the standard CDC privacy rule
+    used by surveillance journals broadly, not specific to PCD).
   - **UDS Mapper** ZIP-to-ZCTA crosswalk (2023 vintage).
 - **Do not** reproduce verbatim text from `_assumptions.md`; paraphrase.
 - **Do not** introduce new analytic decisions. If something is missing
@@ -405,9 +517,12 @@ Paper 2.
 - **Tier terminology:** always write "Tier 1", "Tier 2", "Tier 2b",
   "Tier 3" with a capital T. Never abbreviate to T1/T2 (those refer to
   diabetes type in this paper).
-- **Cohort terminology:** always write "continuous cohort" and
-  "fractional cohort" (lowercase c); always state that continuous is
-  the primary analysis.
+- **Cohort terminology (rev 6, 2026-05-05):** always write "fractional
+  cohort" and "continuous cohort" (lowercase c); always state that
+  **fractional is the primary analysis** and continuous is the
+  principal sensitivity. The 2026-04-30 cohort comparison is the
+  empirical justification — cite §8.6 of `_assumptions.md` and
+  describe the comparison briefly in the Methods.
 - **Outcome terminology:** always distinguish:
   - "DFU prevalence" or "DFU coding prevalence"
   - "amputation incidence" (when denominator is all DM)
@@ -450,8 +565,10 @@ include the checklist (with checks) at the bottom of `paper/methods.md`:
       approximation, which is Tier 2b sensitivity).
 - [ ] Denominator is described as **enrollment-weighted** (MEST +
       BEN_SUM), not claims-observed.
-- [ ] **Continuous cohort** is named as primary; fractional cohort as
-      sensitivity.
+- [ ] **Fractional cohort is named as primary** (rev 6); continuous
+      cohort as principal sensitivity. The empirical justification
+      (Δ Moran's I, Delta-Interior signal recovery) is stated in
+      §3.4.
 - [ ] **All three outcomes** (DFU prevalence, amputation incidence,
       conditional amputation) are described in §3.5.
 - [ ] **Local EB smoothing** is described in §3.6 with rationale.
@@ -482,6 +599,17 @@ include the checklist (with checks) at the bottom of `paper/methods.md`:
       data-capture artifact with a sensitivity-exclusion plan.
 - [ ] **Identity-resolution collision** limitation is named with the
       APCD-lacks-SSN rationale.
+- [ ] **Health & Place target verified (rev 6, 2026-05-05).** No
+      surviving references to PCD, GIS Snapshot format, or the
+      May 2026 deadline. Word budget target is 2,000–2,500 (Methods)
+      not 900–1,100.
+- [ ] **MAUP acknowledged** (Openshaw 1984 or similar). H&P reviewers
+      expect explicit treatment of the modifiable areal unit problem.
+- [ ] **Place-based health framing** in Introduction (Diez Roux 2001
+      or similar) — H&P-style framing emphasizes "place" as a causal
+      construct, not just a unit of analysis.
+- [ ] **Reproducibility paragraph** included (§2.9): GitHub URL,
+      key R/SAS package versions, AR APCD DUA reference.
 - [ ] Word count is within the target band.
 - [ ] All citations listed in §4 appear in the draft.
 - [ ] No verbatim copy from `_assumptions.md`.

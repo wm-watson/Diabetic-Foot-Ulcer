@@ -1,10 +1,18 @@
 # Analytic Assumptions and Limitations — DFU Arkansas Geospatial Paper
 
+**Target journal:** Health & Place (Elsevier). Pivoted from PCD on
+2026-05-05 after the PCD May 1 deadline passed. See
+`METHODS_PROSE_INSTRUCTIONS.md` for the H&P-specific structural
+requirements; the underlying methodology in this document is unchanged
+by the journal pivot.
+
 **Purpose:** Running log of every methodological decision made in the R pipeline.
 Every item here must be addressable in the paper's Methods or Limitations section.
 
-Last updated: 2026-04-30 (FFS coverage verified against AR APCD Medicare
-Element List, see note below; otherwise unchanged from 2026-04-28 rev 4).
+Last updated: 2026-05-05 (rev 6 — fractional cohort promoted to
+primary based on 2026-04-30 cohort comparison; target journal pivoted
+to Health & Place). FFS coverage was verified 2026-04-30 against the
+AR APCD Medicare Element List, see note below.
 
 > **Data scope verified 2026-04-30.** The AR APCD Medicare Element List
 > (`240223 MCR APCD Element List FINAL.xlsx`) confirms the extract
@@ -273,8 +281,22 @@ credited with 12/12 months.
 
 | Cohort | Definition | Role |
 |---|---|---|
-| **Cohort 1 — Continuous (PRIMARY)** | All 72 months of the study window covered, bitwise OR across medical payers. | Main analysis; strongest internal validity. |
-| **Cohort 2 — Fractional (SENSITIVITY)** | Any patient with ≥1 month of medical enrollment anywhere in 2017–2022; contributes `enrolled_months/6` person-halfyears to each bin. | Robustness check; retains churn-exposed populations. |
+| **Cohort A — Fractional (PRIMARY, rev 6 2026-05-05)** | Any patient with ≥1 month of medical enrollment anywhere in 2017–2022; contributes `enrolled_months/6` person-halfyears to each bin (≥3-month per-bin floor). N = 313,177. | Main analysis; retains the high-churn populations central to the AR DFU question. |
+| **Cohort B — Continuous (SENSITIVITY, rev 6 2026-05-05)** | All 72 months of the study window covered, bitwise OR across medical payers. N = 190,943. | Principal sensitivity; demonstrates how stable-insurance restriction biases against the highest-risk Arkansans. |
+
+**Why fractional is primary** (added 2026-05-05): the 2026-04-30
+empirical comparison showed the continuous-enrollment cohort
+systematically excludes the highest-churn populations and hides the
+Delta-Interior amputation signal. Pooled Moran's I for amputation
+incidence rose from 0.30 (continuous) to 0.44 (fractional); the
+Delta-Interior amputation hot/cold count went from ambiguous (14
+hot / 14 cold ZCTAs) to clearly elevated (10 hot / 3 cold). Border-
+Memphis cold pattern persisted across cohorts (mechanism: TN-MA
+capture failure, independent of within-AR enrollment continuity).
+Ozark protective signal also persisted (54 cold / 0 hot in continuous;
+55 cold / 0 hot in fractional, Mixed-payer conditional amputation).
+Selection-bias rationale rather than convention drives the cohort
+choice. See §8.6 for the full comparison.
 
 For Cohort 2, a **per-bin floor of ≥3 of 6 months (50%)** is enforced
 at the analysis stage. Bins with <3 months contribute zero person-time
@@ -342,13 +364,15 @@ epidemiological formulation.
   survive FDR (tested 2026-04-11). Local EB preserves the gradient that
   makes hot/cold spot detection meaningful.
 
-### 6.4 Small-cell suppression (rev 3, 2026-04-21)
-- **PCD display rule:** numerator <11 OR denominator <20 per cell.
+### 6.4 Small-cell suppression (rev 3, 2026-04-21; rev 6 terminology 2026-05-05)
+- **CDC small-cell display rule** (used by surveillance journals
+  generally, including but not specific to PCD): numerator <11 OR
+  denominator <20 per cell.
 - **Analytic vs display separation** (critical decision, 2026-04-21):
-  Previously the PCD rule was applied as an *exclusion criterion* in
-  the pooled Gi*/LISA analysis itself. That hid 361 low-DFU-burden
+  Previously the small-cell rule was applied as an *exclusion criterion*
+  in the pooled Gi*/LISA analysis itself. That hid 361 low-DFU-burden
   ZCTAs (median 2 DFU cases, median 336 DM person-halfyears) -- ZCTAs
-  that were analytically fine but failed the PCD display threshold --
+  that were analytically fine but failed the display threshold --
   and collapsed the cold-spot signal. Gi* then saw only 314 of 614 AR
   ZCTAs and the map showed all-hot-or-nothing.
 - **Current default (`SUPPRESS_DISPLAY = FALSE` in
@@ -359,7 +383,7 @@ epidemiological formulation.
   single-test z-bands). Local EB smoothing handles the small-N
   instability.
 - **For publication:** set `SUPPRESS_DISPLAY = TRUE` to re-apply the
-  PCD <11 cases rule to displayed cell-level rate labels. The Gi*
+  CDC <11 cases rule to displayed cell-level rate labels. The Gi*
   analysis itself remains on all 602 ZCTAs; the suppression only
   affects the rate choropleth labels and descriptive tables.
 - **EHSA input (script 06)** is unsuppressed regardless of the flag.

@@ -1,9 +1,22 @@
-# PCD Paper Outline — Descriptive EHSA of DFU in Arkansas
+# Paper Outline — Descriptive Spatial Analysis of DFU in Arkansas
 
-**Target:** Preventing Chronic Disease, Jan 2026 Call for Papers
-**Type:** Original Research (≈3,500 words) — revisit GIS Snapshot option after drafting
-**Deadline:** May 1, 2026
-**Framing:** Descriptive geospatial analysis. Modeling deferred to Paper 2.
+**Target journal:** *Health & Place* (Elsevier). Rolling submission.
+**Type:** Original Research, ~5,500–6,500 words including all sections.
+**Methods word budget:** 2,000–2,500 (see `METHODS_PROSE_INSTRUCTIONS.md` §4).
+**Framing:** Descriptive geospatial analysis with explicit
+methodological contribution (payer stratification + three outcomes +
+fractional cohort selection-bias diagnosis). Spatial regression /
+modeling deferred to Paper 2.
+
+**Journal pivot history (2026-05-05):** Originally targeted at
+*Preventing Chronic Disease* (PCD) Jan 2026 Call for Papers, deadline
+May 1, 2026. Pivoted to Health & Place after that deadline passed.
+H&P offers a more natural fit for the methodological contribution and
+allows longer-form treatment than PCD. See
+`METHODS_PROSE_INSTRUCTIONS.md` for the H&P structural requirements
+that supersede the PCD-style outline below — the substantive content
+of the outline (titles, sections, key results) carries over largely
+unchanged but the word counts and section structure are different.
 
 ---
 
