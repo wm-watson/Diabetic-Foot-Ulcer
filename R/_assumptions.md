@@ -408,10 +408,42 @@ epidemiological formulation.
 - Medicare: sex_ident_cd (1=M, 2=F, else U) — harmonized to M/F/U in step5.
 - Unknown/other categories combined into "U" for Table 1.
 
-### 7.3 Race
-- Commercial: NOT COLLECTED. Reported as "Not available" in Table 1.
-- Medicare: `bene_race_cd` and `rti_race_cd` (RTI-imputed race).
-- **Decision:** Report race only for Medicare subpopulation using RTI race (more accurate than CMS race per Bonito et al. 2008). Commercial race treated as structural missingness, not imputed.
+### 7.3 Race and ethnicity (rev 7, 2026-05-15 — corrected)
+
+Earlier revisions stated "Commercial: NOT COLLECTED" and treated all
+non-Medicare race as structural missingness. **That was too broad and
+conflated three distinct situations:**
+
+| Payer | Race/ethnicity in AR APCD | In our current extract? |
+|---|---|---|
+| **Medicare** | `bene_race_cd` + `rti_race_cd` (RTI-enhanced), ~100% complete | ✅ Yes (257,932 patients) |
+| **Medicaid** | Collected (federally mandated for state Medicaid); carried in the MEMBER/ELG ethnicity fields. APCD submission completeness improves over time — ethnicity was historically optional but **required as of 2022-06-30** per the ACHI data dictionary | ❌ **Not extracted** (pipeline omission, not a data gap) |
+| **Commercial** | MEMBER/ELG ethnicity fields exist but are historically optional and **poorly populated** by commercial submitters | ❌ Not extracted; would be sparse even if pulled |
+
+**Root cause of the gap:** `step5_zip_extract.sas` pulled Medicare
+race (`bene_race_cd`/`rti_race_cd`) but never pulled the MEMBER/ELG
+member-ethnicity fields for the non-Medicare pipeline. In addition,
+the analytic `data_source` field labels *both* commercial and
+Medicaid patients as "COMMERCIAL"; the Medicaid subset is only
+identifiable via `payer_strata.csv` (`primary_payer_category =
+MEDICAID`).
+
+**Decision (rev 7):**
+- Primary Table 1 still reports race for the Medicare subpopulation
+  using RTI race (more accurate than CMS race per Bonito et al. 2008).
+- **Medicaid race/ethnicity is recoverable** via a targeted re-extract
+  of the MEMBER/ELG ethnicity fields joined to the Medicaid-stratum
+  `apcd_unique_id`s (see `sas/step3e_medicaid_race.sas`). This enables
+  a race-stratified sensitivity on the Delta-Interior Medicaid
+  amputation finding — high value for the Health & Place health-equity
+  framing.
+- Commercial race is treated as structural missingness (sparse even
+  where submitted); not imputed.
+- The local `AR_APCD_DataDictionary.docx` is an **older MEMBER layout**
+  (ME025 = Coverage End Date) and does not show the ethnicity fields;
+  the current (Feb 2024) ACHI Confluence layout does. Use the
+  Confluence dictionary as authoritative for the re-extract field
+  codes.
 
 ---
 
@@ -752,7 +784,18 @@ approach.
 6. **Ambiguous-DM fraction is large** — likely coding-driven, not biological.
 7. **Left censoring** — DM history before 2017/2014 unknown (§5.4).
 8. **Medicare 2022 cutoff** — 2023–2024 EHSA on commercial-only (§5.5).
-9. **Race unavailable for commercial** — racial disparity analysis limited to Medicare.
+9. **Race/ethnicity extraction gap (rev 7)** — In the current
+   analytic file, race is available only for Medicare (RTI race).
+   Commercial race is sparse (historically optional APCD submission).
+   **Medicaid race/ethnicity IS collected (federally mandated) and is
+   present in the AR APCD MEMBER/ELG ethnicity fields, but was not
+   pulled by `step5_zip_extract.sas`** — a recoverable pipeline
+   omission, not an inherent data limitation (§7.3). A targeted
+   re-extract (`sas/step3e_medicaid_race.sas`) enables race-stratified
+   analysis of the Medicaid stratum, including the Delta-Interior
+   amputation finding. Until that re-extract is run, racial-disparity
+   analysis is limited to the Medicare subpopulation, and this is
+   stated as a current (not permanent) limitation.
 10. **Uninsured not captured** — AR APCD is insured-population only; uninsured diabetics and those paying cash are invisible.
 11. **Dual-eligibles simplified to Medicare** — commercial history before Medicare enrollment lost.
 12. **ZCTA = geographic proxy for neighborhood** — does not align with care service areas, food environments, or census tracts.
