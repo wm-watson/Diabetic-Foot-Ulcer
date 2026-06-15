@@ -1,0 +1,8 @@
+{
+  "bundle": "t003_enrollment_bins",
+  "source_file": "sas/step3c_enrollment.sas",
+  "source_blob_sha": "dfa9fabfa1c5fbc8a93a9d32dd0dbf15571e5da6",
+  "source_commit": "14e3184157af9535c538400f29e34efe2e224704",
+  "tier": "mock_data",
+  "notes": "Part D half-year enrollment rollup: array conversion of 12 char monthly flags to numeric, sum(of) into h1/h2 months, SQL pivot to one row per person with 12 bin-month columns, then derived cohort flags (total months, bins>=3of6, bins-with-any, continuous-enrolled). _enrollment_by_year (ODBC-built) replaced with WORK stand-in."
+}

@@ -1,0 +1,38 @@
+Jenner 0.1.0 (Unlicensed - limited to 100 observations)
+Get a license at https://jenneranalytics.com/license
+
+NOTE: Option OBS changed to 100.
+NOTE: DATA _enrollment_by_year
+
+NOTE: Processing inline DATALINES (11 lines)
+
+NOTE: Read 11 rows from DATALINES.
+NOTE: Wrote _enrollment_by_year (11 rows, 15 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: DATA _enrollment_bins
+
+
+NOTE: Read 11 rows from _enrollment_by_year.
+NOTE: Wrote _enrollment_bins (11 rows, 17 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Table _enrollment_wide created.
+NOTE: PROC SQL statement used.
+NOTE: DATA _enrollment_wide
+
+
+NOTE: Read 3 rows from _enrollment_wide.
+NOTE: Wrote _enrollment_wide (3 rows, 18 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: D-1 Bin-level enrollment rollup complete.
+NOTE: Option TITLE changed to Step 3c-D: Enrollment Bin Rollup.
+NOTE: PROC PRINT data=_enrollment_wide
+
+NOTE: PROC PRINT completed: 3 observations printed, 6 variables

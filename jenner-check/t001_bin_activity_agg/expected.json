@@ -1,0 +1,18 @@
+{
+  "_captured_at": "2026-06-15T17:03:17.363351Z",
+  "_captured_run_id": "r_019ecc3c4e867812905b263d3eb0cc67",
+  "status": "ok",
+  "exit_code": 0,
+  "log_contains": [
+    "NOTE: Part B Commercial bin activity complete.",
+    "NOTE: Table _bin_comm_agg created."
+  ],
+  "log_does_not_contain": [
+    "ERROR:",
+    "[JENNER-ERROR"
+  ],
+  "diagnostics": {
+    "parse_warnings": [],
+    "runtime_warnings": []
+  }
+}

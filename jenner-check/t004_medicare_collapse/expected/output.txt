@@ -1,0 +1,5 @@
+                                             Medicare Bin Activity Summary                                              
+
+n_rows  n_patients  min_year  max_year  dm_active_bins  dfu_active_bins
+------  ----------  --------  --------  --------------  ---------------
+     4           3    2017.0    2020.0               4                3

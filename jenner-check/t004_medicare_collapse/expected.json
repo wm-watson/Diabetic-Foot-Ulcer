@@ -1,0 +1,17 @@
+{
+  "_captured_at": "2026-06-15T17:05:55.585269Z",
+  "_captured_run_id": "r_019ecc3f0d6a7a5080bf790e5dd54a7f",
+  "status": "ok",
+  "exit_code": 0,
+  "log_contains": [
+    "NOTE: Medicare bin activity re-run complete."
+  ],
+  "log_does_not_contain": [
+    "ERROR:",
+    "[JENNER-ERROR"
+  ],
+  "diagnostics": {
+    "parse_warnings": [],
+    "runtime_warnings": []
+  }
+}

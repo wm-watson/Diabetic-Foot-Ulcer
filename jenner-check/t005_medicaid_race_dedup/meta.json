@@ -1,0 +1,8 @@
+{
+  "bundle": "t005_medicaid_race_dedup",
+  "source_file": "sas/step3e_medicaid_race.sas",
+  "source_blob_sha": "94bb8b663627f65eb4ba9b8513fcf83a4ded4818",
+  "source_commit": "14e3184157af9535c538400f29e34efe2e224704",
+  "tier": "mock_data",
+  "notes": "Part C dedup (PROC SORT by descending race + FIRST. selection to prefer a non-missing race) and Part D completeness report (PROC SQL INTO: macro vars + DATA _NULL_ PUT block). ODBC-sourced _mbr_race_raw/medicaid_ids inputs replaced with a WORK stand-in containing duplicate persons; hardcoded report path dropped (PUT to log)."
+}

@@ -1,0 +1,17 @@
+{
+  "_captured_at": "2026-06-15T17:47:24.797088Z",
+  "_captured_run_id": "r_019ecc64dc9775728766392fce6eb344",
+  "status": "ok",
+  "exit_code": 0,
+  "log_contains": [
+    "NOTE: Step 3e dedup + completeness complete."
+  ],
+  "log_does_not_contain": [
+    "ERROR:",
+    "[JENNER-ERROR"
+  ],
+  "diagnostics": {
+    "parse_warnings": [],
+    "runtime_warnings": []
+  }
+}

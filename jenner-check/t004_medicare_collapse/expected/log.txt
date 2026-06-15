@@ -1,0 +1,40 @@
+Jenner 0.1.0 (Unlicensed - limited to 100 observations)
+Get a license at https://jenneranalytics.com/license
+
+NOTE: Option COMPRESS changed to YES.
+NOTE: Option OBS changed to 100.
+NOTE: DATA _bin_mcr_raw
+
+NOTE: Processing inline DATALINES (7 lines)
+
+NOTE: Read 7 rows from DATALINES.
+NOTE: Wrote _bin_mcr_raw (7 rows, 11 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: DATA dm_cohort_medicare
+
+NOTE: Processing inline DATALINES (3 lines)
+
+NOTE: Read 3 rows from DATALINES.
+NOTE: Wrote dm_cohort_medicare (3 rows, 1 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Table bin_activity_medicare created.
+NOTE: PROC SQL statement used.
+NOTE: PROC SQL 
+
+NOTE: Table _bin_mcr_final created.
+NOTE: PROC SQL statement used.
+NOTE: PROC SQL 
+
+NOTE: Table bin_activity_medicare created.
+NOTE: PROC SQL statement used.
+NOTE: Option TITLE changed to Medicare Bin Activity Summary.
+NOTE: PROC SQL 
+
+NOTE: PROC SQL statement used.
+NOTE: Medicare bin activity re-run complete.
