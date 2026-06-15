@@ -1,0 +1,9 @@
+                                            Step 3c-D: Enrollment Bin Rollup                                            
+
+
+APCD_UNIQUE_ID  GENDER  TOTAL_MONTHS_ENROLLED  N_BINS_GE_3_OF_6  N_BINS_WITH_ANY  CONTINUOUS_ENROLLED
+--------------  ------  ---------------------  ----------------  ---------------  -------------------
+UID001          M                          72                12               12                    1
+UID002          F                          24                 5                5                    0
+UID003          F                          18                 3                4                    0
+

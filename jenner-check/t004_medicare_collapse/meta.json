@@ -1,0 +1,8 @@
+{
+  "bundle": "t004_medicare_collapse",
+  "source_file": "step3b_medicare_rerun.sas",
+  "source_blob_sha": "684e28a7a8d9b8d9dd07cdddbff381da7bcfc64b",
+  "source_commit": "14e3184157af9535c538400f29e34efe2e224704",
+  "tier": "mock_data",
+  "notes": "Collapse seven-table Medicare accumulator across (bene_id x bin) with max()/sum(), inner-join to dm_cohort_medicare as a safety net, then one-row study summary. _bin_mcr_raw and dm_cohort_medicare (ODBC/WORK from prior steps) replaced with small stand-ins containing within-bin dups and one non-cohort patient to exercise both the collapse and the join filter."
+}

@@ -1,0 +1,8 @@
+{
+  "bundle": "t002_bin_summary_reports",
+  "source_file": "step3b_bin_activity.sas",
+  "source_blob_sha": "d9fcc7f19aacb8c95ddf355f9449d598a0407948",
+  "source_commit": "14e3184157af9535c538400f29e34efe2e224704",
+  "tier": "mock_data",
+  "notes": "Part F1-F4 summary reports: by-year (commercial + Medicare), half-year combined, seasonal combined. F3/F4 use a UNION ALL subquery over both sources restricted to 2017-2022. ODBC-built bin_activity_commercial and bin_activity_medicare replaced with small WORK stand-ins of matching shape."
+}

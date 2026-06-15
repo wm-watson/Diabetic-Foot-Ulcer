@@ -1,0 +1,53 @@
+Jenner 0.1.0 (Unlicensed - limited to 100 observations)
+Get a license at https://jenneranalytics.com/license
+
+NOTE: Option OBS changed to 100.
+NOTE: DATA work.medicaid_race
+
+NOTE: Processing inline DATALINES (6 lines)
+
+NOTE: Read 6 rows from DATALINES.
+NOTE: Wrote work.medicaid_race (6 rows, 5 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SORT data=work.medicaid_race
+
+NOTE: Unlicensed mode - input limited to 100 observations.
+NOTE: Read 6 rows from work.medicaid_race.
+NOTE: Wrote work.medicaid_race (6 rows, 5 columns).
+NOTE: PROC SORT statement used.
+NOTE: DATA work.medicaid_race
+
+
+NOTE: Read 6 rows from work.medicaid_race.
+NOTE: Wrote work.medicaid_race (4 rows, 5 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Macro variable N_TOT = 4
+NOTE: Macro variable N_RACE = 4
+NOTE: Macro variable N_E1 = 4
+NOTE: Macro variable N_E2 = 4
+NOTE: PROC SQL statement used.
+NOTE: DATA _null_
+
+MEDICAID-STRATUM RACE / ETHNICITY RE-EXTRACT (step3e)
+=====================================================
+ 
+Medicaid-stratum persons:        4
+  with non-missing race:         4
+  with non-missing ethnicity 1:  4
+  with non-missing ethnicity 2:  4
+
+NOTE: Wrote _null_ (0 rows, 0 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: Option TITLE changed to Step 3e-C: Deduplicated Medicaid Race Stratum.
+NOTE: PROC PRINT data=work.medicaid_race
+
+NOTE: PROC PRINT completed: 4 observations printed, 5 variables
+NOTE: Step 3e dedup + completeness complete.

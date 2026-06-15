@@ -1,0 +1,8 @@
+{
+  "bundle": "t001_bin_activity_agg",
+  "source_file": "step3b_bin_activity.sas",
+  "source_blob_sha": "d9fcc7f19aacb8c95ddf355f9449d598a0407948",
+  "source_commit": "14e3184157af9535c538400f29e34efe2e224704",
+  "tier": "mock_data",
+  "notes": "Part B collapse + summary: max()/sum() group-by that dedups duplicate patient x bin rows, then a one-row PROC SQL study summary. ODBC/mylib extraction replaced with a 12-row WORK stand-in matching the real bin_activity_commercial column shape."
+}

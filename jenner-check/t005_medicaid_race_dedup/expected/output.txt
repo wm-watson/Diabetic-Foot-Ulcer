@@ -1,0 +1,10 @@
+                                     Step 3e-C: Deduplicated Medicaid Race Stratum                                      
+
+
+APCD_UNIQUE_ID  MEMBER_RACE  MEMBER_ETH1  MEMBER_ETH2  RACE_ETH_SOURCE_YEAR
+--------------  -----------  -----------  -----------  --------------------
+UID001          WHT          H            .                            2022
+UID002          BLK          NH           .                            2023
+UID003          ASN          NH           .                            2022
+UID004          WHT          .            .                            2019
+
