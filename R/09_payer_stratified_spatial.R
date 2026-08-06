@@ -73,6 +73,11 @@ OUTCOME <- tolower(Sys.getenv("DFU_OUTCOME", "dfu"))
 #   "amp"     = amputation incidence among DM (numerator: first amp; denom: DM PHY)
 #   "amp_dfu" = conditional amp among Tier 2 DFU (numerator: first amp among DFU;
 #               denominator: DFU person-halfyears, restricted to Tier 2)
+#   "debride" = wound-debridement incidence among DM (numerator: first debride;
+#               denominator: DM PHY). Debridement (CPT 97597-98, 11042-47, 97602)
+#               is done exclusively by specialty providers (podiatry, wound care,
+#               vascular, plastic surgery), so its spatial pattern is a direct
+#               proxy for specialty-care access, unlike PCP-visit rates.
 #
 # The amp_dfu outcome is the payer-stratified counterpart of script 08
 # (conditional amputation analysis). It uses a smaller, restricted cohort
@@ -80,7 +85,7 @@ OUTCOME <- tolower(Sys.getenv("DFU_OUTCOME", "dfu"))
 # stable spatial estimates and the script will warn if <30 ZCTAs remain.
 
 stopifnot(STRATUM %in% c("MEDICARE", "MEDICAID", "COMMERCIAL", "MIXED"))
-stopifnot(OUTCOME %in% c("dfu", "amp", "amp_dfu"))
+stopifnot(OUTCOME %in% c("dfu", "amp", "amp_dfu", "debride"))
 message("Cohort:   ", COHORT)
 message("Stratum:  ", STRATUM)
 message("Outcome:  ", OUTCOME)
@@ -125,8 +130,9 @@ pt[, apcd_unique_id := fifelse(
     nchar(study_id) >= 2,
     substr(study_id, 1, nchar(study_id) - 1L),
     NA_character_)]
-pt[, first_amp_date := as.Date(first_amp_date)]
-pt[, first_dfu_date := as.Date(first_dfu_date)]
+pt[, first_amp_date     := as.Date(first_amp_date)]
+pt[, first_dfu_date     := as.Date(first_dfu_date)]
+pt[, first_debride_date := as.Date(first_debride_date)]
 
 pt_strat <- pt[apcd_unique_id %in% strata_ids]
 
@@ -177,6 +183,15 @@ if (OUTCOME %in% c("amp", "amp_dfu")) {
                          first_amp_date <= as.Date("2022-12-31")]
     pt_event[, bin_year := as.integer(format(first_amp_date, "%Y"))]
     pt_event[, half     := ifelse(as.integer(format(first_amp_date, "%m")) <= 6, 1L, 2L)]
+    pt_event[, bin_id   := sprintf("%d-H%d", bin_year, half)]
+    num <- pt_event[, .(num_count = .N), by = .(zcta, bin_id)]
+} else if (OUTCOME == "debride") {
+    # First debridement in bin among any DM patient. Specialty-care access proxy.
+    pt_event <- pt_strat[!is.na(first_debride_date) &
+                         first_debride_date >= as.Date("2017-01-01") &
+                         first_debride_date <= as.Date("2022-12-31")]
+    pt_event[, bin_year := as.integer(format(first_debride_date, "%Y"))]
+    pt_event[, half     := ifelse(as.integer(format(first_debride_date, "%m")) <= 6, 1L, 2L)]
     pt_event[, bin_id   := sprintf("%d-H%d", bin_year, half)]
     num <- pt_event[, .(num_count = .N), by = .(zcta, bin_id)]
 } else {
@@ -296,7 +311,8 @@ theme_map <- theme_void(base_size = 12) +
 outcome_label <- switch(OUTCOME,
     "amp"     = "Amputation incidence",
     "amp_dfu" = "DFU → amputation progression",
-    "dfu"     = "DFU prevalence")
+    "dfu"     = "DFU prevalence",
+    "debride" = "Wound debridement incidence")
 n_label <- if (OUTCOME == "amp_dfu") {
     sprintf("%s (Tier 2 DFU only)",
             format(nrow(cohort_strat), big.mark = ","))
