@@ -230,108 +230,163 @@ quit;
 
 /* ======================================================================= */
 /* PART D: Full-population MEST enrollment (mirror step3c, NO DM filter)     */
-/*   Bitwise-OR monthly enrollment strings across medical payer types,       */
-/*   then union with BEN_SUM FFS presence, then aggregate to bin months.    */
+/*                                                                            */
+/* SPACE-SAFE REWRITE (2026-08-06):                                          */
+/*   The prior all-at-once MEST passthrough exhausted D:\WPWatson mid-run    */
+/*   and silently truncated the output (0 rows, apcd_unique_id + gender      */
+/*   dropped from schema). Rewrite splits MEST into per-year passthroughs,   */
+/*   bins each year to (h1_months, h2_months) via SAS-side DATA step,        */
+/*   appends to a compact accumulator, and deletes the per-year WORK         */
+/*   intermediate immediately. Every subpart writes a %put NOTE with a row   */
+/*   count so any silent truncation surfaces in the log.                      */
 /* ======================================================================= */
 
-/* D-1: MEST monthly flags */
+/* D-1: Per-year MEST passthrough + bin. Appends to mylib.enroll_year_bins   */
+/*      with schema (apcd_unique_id, gender, year, h1_months, h2_months).    */
+
+%macro get_mest_year(yr, first=0);
+    /* D-1a: server-side aggregate of monthly enrollment chars per person */
+    proc sql;
+        connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
+        create table _mest_yr as
+        select * from connection to odbc (
+            select apcd_unique_id,
+                   gender,
+                   max(substring(enrollment_string, 1,  1)) as m01,
+                   max(substring(enrollment_string, 2,  1)) as m02,
+                   max(substring(enrollment_string, 3,  1)) as m03,
+                   max(substring(enrollment_string, 4,  1)) as m04,
+                   max(substring(enrollment_string, 5,  1)) as m05,
+                   max(substring(enrollment_string, 6,  1)) as m06,
+                   max(substring(enrollment_string, 7,  1)) as m07,
+                   max(substring(enrollment_string, 8,  1)) as m08,
+                   max(substring(enrollment_string, 9,  1)) as m09,
+                   max(substring(enrollment_string, 10, 1)) as m10,
+                   max(substring(enrollment_string, 11, 1)) as m11,
+                   max(substring(enrollment_string, 12, 1)) as m12
+            from public.AR_APCD_24B_MEST
+            where payer_type in (&medical_payers)
+              and year = &q.&yr.&q.
+              and apcd_unique_id is not null
+              and apcd_unique_id <> ''
+            group by apcd_unique_id, gender
+        );
+        disconnect from odbc;
+    quit;
+
+    /* D-1b: SAS-side bin to h1/h2 months, drop monthly chars immediately. */
+    data _mest_yr_binned;
+        length apcd_unique_id $90 gender $1 source $4;
+        set _mest_yr;
+        array mchar {12} $1 m01-m12;
+        array mnum  {12}    n01-n12;
+        do i = 1 to 12;
+            mnum[i] = input(mchar[i], 1.);
+            if missing(mnum[i]) then mnum[i] = 0;
+        end;
+        year       = &yr.;
+        h1_months  = sum(of n01-n06);
+        h2_months  = sum(of n07-n12);
+        source     = 'MEST';
+        keep apcd_unique_id gender year h1_months h2_months source;
+    run;
+
+    %if &first = 1 %then %do;
+        data mylib.enroll_year_bins; set _mest_yr_binned; run;
+    %end;
+    %else %do;
+        proc append base=mylib.enroll_year_bins data=_mest_yr_binned force; run;
+    %end;
+
+    proc sql;
+        select count(*) into :_n_yr from _mest_yr_binned;
+    quit;
+    %put NOTE: D-1 MEST &yr. binned rows appended: &_n_yr.;
+
+    proc datasets lib=work nolist; delete _mest_yr _mest_yr_binned; quit;
+%mend;
+
+%get_mest_year(2017, first=1);
+%get_mest_year(2018);
+%get_mest_year(2019);
+%get_mest_year(2020);
+%get_mest_year(2021);
+%get_mest_year(2022);
+
+proc sql;
+    select count(*) into :n_mest_bins from mylib.enroll_year_bins;
+quit;
+%put NOTE: D-1 MEST total binned person-years: &n_mest_bins.;
+
+
+/* D-2: BEN_SUM Medicare FFS presence (small, one shot).                     */
+/*      Bin directly to h1=6, h2=6 per year of presence.                     */
 proc sql;
     connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
-    create table mylib._mest_enroll_all as
+    create table _bensum_years as
     select * from connection to odbc (
         select apcd_unique_id,
-               gender,
-               cast(year as integer) as year,
-               max(substring(enrollment_string, 1,  1)) as m01,
-               max(substring(enrollment_string, 2,  1)) as m02,
-               max(substring(enrollment_string, 3,  1)) as m03,
-               max(substring(enrollment_string, 4,  1)) as m04,
-               max(substring(enrollment_string, 5,  1)) as m05,
-               max(substring(enrollment_string, 6,  1)) as m06,
-               max(substring(enrollment_string, 7,  1)) as m07,
-               max(substring(enrollment_string, 8,  1)) as m08,
-               max(substring(enrollment_string, 9,  1)) as m09,
-               max(substring(enrollment_string, 10, 1)) as m10,
-               max(substring(enrollment_string, 11, 1)) as m11,
-               max(substring(enrollment_string, 12, 1)) as m12
-        from public.AR_APCD_24B_MEST
-        where payer_type in (&medical_payers)
-          and year in (&year_list)
-          and apcd_unique_id is not null
-          and apcd_unique_id <> ''
-        group by apcd_unique_id, gender, year
-    );
-    disconnect from odbc;
-quit;
-%put NOTE: D-1 MEST enrollment (all persons) extracted.;
-
-/* D-2: BEN_SUM Medicare FFS presence */
-proc sql;
-    connect to odbc (noprompt="dsn=APCD-24D;Trusted_connection=yes");
-    create table mylib._bensum_years_all as
-    select * from connection to odbc (
-        select bene_id,
-               apcd_unique_id,
                sex_ident_cd,
                bene_enrollmt_ref_yr as year
         from public.APCD_MCR_BEN_SUM
         where bene_enrollmt_ref_yr between &yr_start and &yr_end
           and apcd_unique_id is not null
           and apcd_unique_id <> ''
+        group by apcd_unique_id, sex_ident_cd, bene_enrollmt_ref_yr
     );
     disconnect from odbc;
 quit;
-%put NOTE: D-2 BEN_SUM (all persons) extracted.;
 
-/* D-3: Union MEST + BEN_SUM (12-month full flags for FFS) */
-data mylib._enroll_unified_all;
-    length source $4 apcd_unique_id $90 gender $1;
-    set
-        mylib._mest_enroll_all (in=from_mest)
-        mylib._bensum_years_all (in=from_bensum
-                                 rename=(sex_ident_cd=_sex_code));
-    if from_mest then source = 'MEST';
-    else if from_bensum then do;
-        source = 'FFS';
-        if _sex_code = '1' then gender = 'M';
-        else if _sex_code = '2' then gender = 'F';
-        else gender = 'U';
-        m01='1'; m02='1'; m03='1'; m04='1'; m05='1'; m06='1';
-        m07='1'; m08='1'; m09='1'; m10='1'; m11='1'; m12='1';
-    end;
-    drop _sex_code;
+data _bensum_binned;
+    length apcd_unique_id $90 gender $1 source $4;
+    set _bensum_years;
+    if      sex_ident_cd = '1' then gender = 'M';
+    else if sex_ident_cd = '2' then gender = 'F';
+    else                            gender = 'U';
+    h1_months = 6;
+    h2_months = 6;
+    source    = 'FFS';
+    keep apcd_unique_id gender year h1_months h2_months source;
 run;
 
-/* D-4: Bitwise OR across sources per person-year */
+proc append base=mylib.enroll_year_bins data=_bensum_binned force; run;
+
 proc sql;
-    create table mylib._enroll_by_year_all as
+    select count(*) into :n_bensum from _bensum_binned;
+    select count(*) into :n_after_ffs from mylib.enroll_year_bins;
+quit;
+%put NOTE: D-2 BEN_SUM binned rows appended: &n_bensum. (total now &n_after_ffs.);
+
+proc datasets lib=work nolist; delete _bensum_years _bensum_binned; quit;
+
+
+/* D-3: Collapse MEST + FFS to one row per (apcd_unique_id, year).           */
+/*      max(h1_months) and max(h2_months) implement the bitwise-OR across    */
+/*      sources (an FFS year of 6 overrides an absent MEST bin, etc.).       */
+proc sql;
+    create table mylib.enroll_person_year as
     select apcd_unique_id,
+           year,
            case when max(gender) = 'U' then min(gender) else max(gender) end
                as gender length=1,
-           year,
-           max(m01) as m01, max(m02) as m02, max(m03) as m03,
-           max(m04) as m04, max(m05) as m05, max(m06) as m06,
-           max(m07) as m07, max(m08) as m08, max(m09) as m09,
-           max(m10) as m10, max(m11) as m11, max(m12) as m12
-    from mylib._enroll_unified_all
+           max(h1_months) as h1_months,
+           max(h2_months) as h2_months
+    from mylib.enroll_year_bins
+    where apcd_unique_id is not null and apcd_unique_id <> ''
     group by apcd_unique_id, year;
 quit;
 
-/* D-5: Convert monthly chars to numeric, sum to H1 / H2 months per year */
-data mylib._enroll_bins_all;
-    set mylib._enroll_by_year_all;
-    array mchar {12} $1 m01-m12;
-    array mnum  {12}    n01-n12;
-    do i = 1 to 12;
-        mnum[i] = input(mchar[i], 1.);
-        if missing(mnum[i]) then mnum[i] = 0;
-    end;
-    h1_months = sum(of n01-n06);
-    h2_months = sum(of n07-n12);
-    drop i n01-n12;
-run;
+proc sql;
+    select count(*) into :n_person_year from mylib.enroll_person_year;
+    select count(distinct apcd_unique_id) into :n_person
+      from mylib.enroll_person_year;
+quit;
+%put NOTE: D-3 person-year rows: &n_person_year. distinct persons: &n_person.;
 
-/* D-6: Pivot wide: one row per apcd_unique_id with 12 bin-month columns */
+proc datasets lib=mylib nolist; delete enroll_year_bins; quit;
+
+
+/* D-4: Wide pivot: one row per apcd_unique_id, 12 half-year bin columns.    */
 proc sql;
     create table mylib.all_enrollment_raw as
     select apcd_unique_id,
@@ -348,12 +403,24 @@ proc sql;
            sum(case when year=2021 then h2_months else 0 end) as m_h2_2021,
            sum(case when year=2022 then h1_months else 0 end) as m_h1_2022,
            sum(case when year=2022 then h2_months else 0 end) as m_h2_2022
-    from mylib._enroll_bins_all
+    from mylib.enroll_person_year
     group by apcd_unique_id;
 quit;
 
-/* Add derived fields */
+proc sql;
+    select count(*) into :n_raw from mylib.all_enrollment_raw;
+quit;
+%put NOTE: D-4 wide pivot rows: &n_raw.;
+
+proc datasets lib=mylib nolist; delete enroll_person_year; quit;
+
+
+/* D-5: Derived fields + final table.                                        */
 data mylib.all_enrollment;
+    retain apcd_unique_id gender
+           m_h1_2017 m_h2_2017 m_h1_2018 m_h2_2018
+           m_h1_2019 m_h2_2019 m_h1_2020 m_h2_2020
+           m_h1_2021 m_h2_2021 m_h1_2022 m_h2_2022;
     set mylib.all_enrollment_raw;
     array bins {12} m_h1_2017 m_h2_2017 m_h1_2018 m_h2_2018
                     m_h1_2019 m_h2_2019 m_h1_2020 m_h2_2020
@@ -361,16 +428,24 @@ data mylib.all_enrollment;
     total_months_enrolled = sum(of bins[*]);
     n_bins_ge_3_of_6 = 0;
     n_bins_with_any  = 0;
-    all_bins_full    = 1;
+    _all_bins_full   = 1;
     do i = 1 to 12;
         if bins[i] >= 3 then n_bins_ge_3_of_6 + 1;
         if bins[i] >= 1 then n_bins_with_any  + 1;
-        if bins[i] <  6 then all_bins_full = 0;
+        if bins[i] <  6 then _all_bins_full = 0;
     end;
-    continuous_enrolled = all_bins_full;
-    drop i all_bins_full;
+    continuous_enrolled = _all_bins_full;
+    drop i _all_bins_full;
 run;
-%put NOTE: D-6 All-population enrollment table built.;
+
+proc sql;
+    select count(*) into :n_final from mylib.all_enrollment;
+    select count(*) into :n_cont  from mylib.all_enrollment
+        where continuous_enrolled = 1;
+quit;
+%put NOTE: D-5 all_enrollment rows: &n_final. continuous: &n_cont.;
+
+proc datasets lib=mylib nolist; delete all_enrollment_raw; quit;
 
 
 /* ======================================================================= */
@@ -681,10 +756,11 @@ run;
 
 proc datasets library=mylib nolist;
     delete comm_pcp_year mcr_prtb_pcp mcr_out_pcp
-           _mest_enroll_all _bensum_years_all _enroll_unified_all
-           _enroll_by_year_all _enroll_bins_all all_enrollment_raw
            _member_all _mest_id _bensum_latest_all _claim_zip_2024_all;
 quit;
+/* NOTE: Part D intermediates (enroll_year_bins, enroll_person_year,          */
+/* all_enrollment_raw) are already deleted inline as each stage completes,    */
+/* to keep D:\WPWatson footprint small (space fix, 2026-08-06).               */
 
 proc datasets lib=work nolist;
     delete comm_pcp_id mcr_pcp_id _mcr_pcp_stack _mcr_pcp_by_bene

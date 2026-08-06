@@ -44,8 +44,10 @@
 #
 # Env vars
 #   DFU_PAYER_STRATUM  MEDICAID | COMMERCIAL | MEDICARE | MIXED  (default COMMERCIAL)
-#   PCP_DENOM          all | dm                                   (default all)
+#   PCP_DENOM          all | dm                                   (default dm)
 #   DFU_COHORT         continuous | fractional                    (default continuous)
+#   PCP_DIR            step7 output folder (defaults to Dropbox/DFU/)
+#   DFU_ENROLL_DIR     existing analytical datasets (payer_strata.csv, cohort_continuous.csv)
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -68,12 +70,19 @@ DROPBOX_DIR <- Sys.getenv(
 ENROLL_DIR  <- Sys.getenv(
     "DFU_ENROLL_DIR",
     "/Users/williamwatson/Library/CloudStorage/Dropbox/APCD/Analytical Datasets")
+# Step 7 outputs (pcp_visits_bin.csv, all_zip_lookup.csv, and eventually
+# all_enrollment.csv) live in a separate DFU folder unless overridden.
+PCP_DIR <- Sys.getenv(
+    "PCP_DIR",
+    "/Users/williamwatson/Library/CloudStorage/Dropbox/DFU")
 ANALYTIC <- file.path(DROPBOX_DIR, "analytic")
 OUT_DIR  <- file.path(DROPBOX_DIR, "outputs", "pcp_spatial")
 dir_create(OUT_DIR)
 
 STRATUM <- toupper(Sys.getenv("DFU_PAYER_STRATUM", "COMMERCIAL"))
-DENOM   <- tolower(Sys.getenv("PCP_DENOM", "all"))
+# Default DENOM to "dm" until the all-population enrollment file is rebuilt
+# (the initial step7 run exhausted D:\WPWatson mid-passthrough).
+DENOM   <- tolower(Sys.getenv("PCP_DENOM", "dm"))
 COHORT  <- Sys.getenv("DFU_COHORT", "continuous")
 stopifnot(STRATUM %in% c("MEDICARE", "MEDICAID", "COMMERCIAL", "MIXED"))
 stopifnot(DENOM   %in% c("all", "dm"))
@@ -106,7 +115,13 @@ message("Persons in payer stratum ", STRATUM, ": ", length(strata_ids))
 # For DENOM=all use step7's all_enrollment.csv (whole APCD population).
 # For DENOM=dm use step3c's cohort_continuous / cohort_fractional (DM only).
 if (DENOM == "all") {
-    enroll <- fread(file.path(ENROLL_DIR, "all_enrollment.csv"),
+    all_enroll_path <- file.path(PCP_DIR, "all_enrollment.csv")
+    if (!file_exists(all_enroll_path)) {
+        stop("all_enrollment.csv not found at ", all_enroll_path,
+             "\nStep 7 Part D needs to be rerun (D:\\WPWatson space fix).",
+             "\nRun with PCP_DENOM=dm for the diabetes-cohort analysis.")
+    }
+    enroll <- fread(all_enroll_path,
                     colClasses = list(character = "apcd_unique_id"))
     if (COHORT == "continuous") {
         enroll <- enroll[continuous_enrolled == 1L]
@@ -127,7 +142,7 @@ enroll <- enroll[apcd_unique_id %in% strata_ids]
 message("Stratum x cohort intersection: ", nrow(enroll))
 
 # ---- Load ZIP lookup --------------------------------------------------------
-zip_lookup <- fread(file.path(ENROLL_DIR, "all_zip_lookup.csv"),
+zip_lookup <- fread(file.path(PCP_DIR, "all_zip_lookup.csv"),
                     colClasses = list(character = c("apcd_unique_id", "ar_zip")))
 zip_lookup <- zip_lookup[nchar(ar_zip) == 5L]
 
@@ -142,7 +157,7 @@ message("With AR ZIP: ", nrow(enroll))
 enroll[, zcta := ar_zip]
 
 # ---- Load PCP visits (long) ------------------------------------------------
-pcp <- fread(file.path(ENROLL_DIR, "pcp_visits_bin.csv"),
+pcp <- fread(file.path(PCP_DIR, "pcp_visits_bin.csv"),
              colClasses = list(character = c("apcd_unique_id", "bin_id")))
 pcp <- pcp[apcd_unique_id %in% enroll$apcd_unique_id]
 message("PCP-visit rows (stratum): ", nrow(pcp))
